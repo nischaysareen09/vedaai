@@ -19,8 +19,9 @@ import {
   MapPinned,
   ShieldCheck,
   Clock3,
-  ChevronRight,
   RotateCcw,
+  Zap,
+  Image as ImageIcon,
 } from 'lucide-react';
 
 import Sidebar from '@/components/Sidebar';
@@ -29,6 +30,24 @@ import { addHistoryRecord } from '@/lib/history';
 import { useTeacherProfile } from '@/lib/teacher-profile';
 
 const MAX_FILE_MB = 10;
+
+/*
+ * Vercel serverless functions have a request-size limit.
+ *
+ * The original implementation sent:
+ *   - the original PDF
+ *   - question images
+ *   - answer images
+ *
+ * The API only needs questionImages + answerImages.
+ *
+ * We therefore:
+ *   1. Never send the original PDFs to /api/extract.
+ *   2. Downscale generated images in the browser.
+ *   3. Keep the output as PNG base64 so the existing API contract
+ *      remains unchanged.
+ */
+const MAX_IMAGE_DIMENSION = 1400;
 
 type SlotKey = 'question' | 'answer';
 
@@ -100,10 +119,7 @@ function UploadSlot({
   const [isDragging, setIsDragging] = useState(false);
 
   const inputId = `upload-${type}`;
-
-  const handleIncomingFile = (incomingFile: File) => {
-    onFile(incomingFile);
-  };
+  const isQuestion = type === 'question';
 
   const handleDrop = (e: DragEvent<HTMLLabelElement>) => {
     e.preventDefault();
@@ -116,11 +132,9 @@ function UploadSlot({
     const droppedFile = e.dataTransfer.files?.[0];
 
     if (droppedFile) {
-      handleIncomingFile(droppedFile);
+      onFile(droppedFile);
     }
   };
-
-  const isQuestion = type === 'question';
 
   return (
     <div className="min-w-0">
@@ -134,7 +148,7 @@ function UploadSlot({
           const selectedFile = e.target.files?.[0];
 
           if (selectedFile) {
-            handleIncomingFile(selectedFile);
+            onFile(selectedFile);
           }
 
           e.target.value = '';
@@ -169,7 +183,6 @@ function UploadSlot({
                   : 'border-gray-200 bg-white hover:-translate-y-0.5 hover:border-gray-300 hover:shadow-xl hover:shadow-gray-900/[0.06]'
         }`}
       >
-        {/* Top accent */}
         <div
           className={`h-1 w-full ${
             isQuestion ? 'bg-orange-500' : 'bg-violet-600'
@@ -177,7 +190,6 @@ function UploadSlot({
         />
 
         <div className="p-6 sm:p-7">
-          {/* Card header */}
           <div className="mb-7 flex items-start justify-between gap-4">
             <div className="flex min-w-0 items-center gap-4">
               <FileIcon
@@ -242,7 +254,11 @@ function UploadSlot({
 
                   <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-gray-500">
                     <span>{formatFileSize(file.size)}</span>
-                    <span className="text-gray-300">•</span>
+
+                    <span className="text-gray-300">
+                      •
+                    </span>
+
                     <span>
                       {file.type === 'application/pdf'
                         ? 'PDF document'
@@ -269,7 +285,7 @@ function UploadSlot({
                 <Check className="h-4 w-4 shrink-0 text-emerald-600" />
 
                 <span className="text-xs font-medium text-emerald-800">
-                  File passed basic format and size checks
+                  File passed format and size checks
                 </span>
               </div>
             </div>
@@ -320,6 +336,7 @@ function UploadSlot({
           {error && (
             <div className="mt-3 flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2.5 text-xs text-red-700">
               <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+
               <span>{error}</span>
             </div>
           )}
@@ -359,12 +376,190 @@ function WorkflowStep({
       </div>
 
       <div>
-        <p className="text-xs font-bold text-gray-900">{title}</p>
+        <p className="text-xs font-bold text-gray-900">
+          {title}
+        </p>
+
         <p className="mt-0.5 text-[11px] leading-4 text-gray-500">
           {description}
         </p>
       </div>
     </div>
+  );
+}
+
+/*
+ * Downscale a base64 PNG while keeping PNG output.
+ *
+ * This is intentionally PNG rather than JPEG because your existing
+ * backend expects the page data as PNG base64.
+ */
+async function optimizeBase64Image(
+  base64: string,
+  maxDimension = MAX_IMAGE_DIMENSION
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+
+    img.onload = () => {
+      try {
+        const originalWidth =
+          img.naturalWidth || img.width;
+
+        const originalHeight =
+          img.naturalHeight || img.height;
+
+        if (!originalWidth || !originalHeight) {
+          resolve(base64);
+          return;
+        }
+
+        const largestSide = Math.max(
+          originalWidth,
+          originalHeight
+        );
+
+        /*
+         * Already small enough.
+         */
+        if (largestSide <= maxDimension) {
+          resolve(base64);
+          return;
+        }
+
+        const scale =
+          maxDimension / largestSide;
+
+        const width = Math.max(
+          1,
+          Math.round(originalWidth * scale)
+        );
+
+        const height = Math.max(
+          1,
+          Math.round(originalHeight * scale)
+        );
+
+        const canvas =
+          document.createElement('canvas');
+
+        canvas.width = width;
+        canvas.height = height;
+
+        const ctx =
+          canvas.getContext('2d');
+
+        if (!ctx) {
+          resolve(base64);
+          return;
+        }
+
+        /*
+         * White background prevents transparent/blank areas
+         * from becoming black after processing.
+         */
+        ctx.fillStyle = '#ffffff';
+
+        ctx.fillRect(
+          0,
+          0,
+          width,
+          height
+        );
+
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+
+        ctx.drawImage(
+          img,
+          0,
+          0,
+          width,
+          height
+        );
+
+        const optimized =
+          canvas.toDataURL(
+            'image/png'
+          );
+
+        /*
+         * Remove the data:image/png;base64, prefix.
+         *
+         * The existing API expects raw base64 strings.
+         */
+        const commaIndex =
+          optimized.indexOf(',');
+
+        if (commaIndex >= 0) {
+          resolve(
+            optimized.slice(
+              commaIndex + 1
+            )
+          );
+        } else {
+          resolve(optimized);
+        }
+      } catch (error) {
+        reject(error);
+      }
+    };
+
+    img.onerror = () => {
+      /*
+       * If one image cannot be optimized,
+       * preserve the original rather than
+       * breaking the entire assessment.
+       */
+      resolve(base64);
+    };
+
+    img.src =
+      `data:image/png;base64,${base64}`;
+  });
+}
+
+async function optimizeImages(
+  images: string[],
+  onProgress?: (completed: number, total: number) => void
+): Promise<string[]> {
+  const optimized: string[] = [];
+
+  for (let index = 0; index < images.length; index++) {
+    const result =
+      await optimizeBase64Image(
+        images[index]
+      );
+
+    optimized.push(result);
+
+    onProgress?.(
+      index + 1,
+      images.length
+    );
+  }
+
+  return optimized;
+}
+
+function calculateBase64Size(
+  images: string[]
+) {
+  const totalCharacters =
+    images.reduce(
+      (sum, image) =>
+        sum + image.length,
+      0
+    );
+
+  /*
+   * Base64 is approximately 4/3 the
+   * size of the original binary data.
+   */
+  return Math.round(
+    (totalCharacters * 3) /
+      4 /
+      (1024 * 1024)
   );
 }
 
@@ -375,34 +570,45 @@ export default function Home() {
   const [answerSheet, setAnswerSheet] =
     useState<File | null>(null);
 
-  const [errors, setErrors] = useState<
-    Record<SlotKey, string | null>
-  >({
-    question: null,
-    answer: null,
-  });
+  const [errors, setErrors] =
+    useState<
+      Record<
+        SlotKey,
+        string | null
+      >
+    >({
+      question: null,
+      answer: null,
+    });
 
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] =
+    useState(false);
 
   const [loadingLabel, setLoadingLabel] =
-    useState('Preparing assessment...');
+    useState(
+      'Preparing assessment...'
+    );
 
   const [submitError, setSubmitError] =
     useState<string | null>(null);
 
   const router = useRouter();
 
-  const { profile } = useTeacherProfile();
+  const { profile } =
+    useTeacherProfile();
 
   const handleFile = (
     slot: SlotKey,
     file: File
   ) => {
     const isPdf =
-      file.type === 'application/pdf';
+      file.type ===
+      'application/pdf';
 
     const isImage =
-      file.type.startsWith('image/');
+      file.type.startsWith(
+        'image/'
+      );
 
     if (!isPdf && !isImage) {
       setErrors((current) => ({
@@ -416,11 +622,14 @@ export default function Home() {
 
     if (
       file.size >
-      MAX_FILE_MB * 1024 * 1024
+      MAX_FILE_MB *
+        1024 *
+        1024
     ) {
       setErrors((current) => ({
         ...current,
-        [slot]: `This file is larger than ${MAX_FILE_MB}MB. Please upload a smaller scan.`,
+        [slot]:
+          `This file is larger than ${MAX_FILE_MB}MB. Please upload a smaller scan.`,
       }));
 
       return;
@@ -440,267 +649,414 @@ export default function Home() {
     }
   };
 
-  const handleSubmit = async () => {
-    if (!questionPaper || !answerSheet) {
-      return;
-    }
+  const handleSubmit =
+    async () => {
+      if (
+        !questionPaper ||
+        !answerSheet
+      ) {
+        return;
+      }
 
-    setSubmitError(null);
-    setLoading(true);
+      setSubmitError(null);
+      setLoading(true);
 
-    try {
-      // =====================================================
-      // STEP 1: Convert question paper into images
-      // =====================================================
+      try {
+        /*
+         * =====================================================
+         * STEP 1
+         * Convert question paper to page images
+         * =====================================================
+         */
+        setLoadingLabel(
+          'Reading question paper...'
+        );
 
-      setLoadingLabel(
-        'Reading question paper...'
-      );
-
-      const questionImages =
-        questionPaper.type ===
-        'application/pdf'
-          ? await pdfToImages(questionPaper)
-          : [
-              await fileToBase64(
+        const rawQuestionImages =
+          questionPaper.type ===
+          'application/pdf'
+            ? await pdfToImages(
                 questionPaper
-              ),
-            ];
-
-      // =====================================================
-      // STEP 2: Convert answer sheet into images
-      // =====================================================
-
-      setLoadingLabel(
-        'Reading answer sheet...'
-      );
-
-      const answerImages =
-        answerSheet.type ===
-        'application/pdf'
-          ? await pdfToImages(answerSheet)
-          : [
-              await fileToBase64(
-                answerSheet
-              ),
-            ];
-
-      if (answerImages.length === 0) {
-        throw new Error(
-          'Could not read any answer-sheet pages.'
-        );
-      }
-
-      // =====================================================
-      // STEP 3: Send files + images to AI
-      // =====================================================
-
-      setLoadingLabel(
-        'AI is analysing the assessment...'
-      );
-
-      const formData = new FormData();
-
-      formData.append(
-        'questionPaper',
-        questionPaper
-      );
-
-      formData.append(
-        'answerSheet',
-        answerSheet
-      );
-
-      formData.append(
-        'questionImages',
-        JSON.stringify(questionImages)
-      );
-
-      formData.append(
-        'answerImages',
-        JSON.stringify(answerImages)
-      );
-
-      const response = await fetch(
-        '/api/extract',
-        {
-          method: 'POST',
-          body: formData,
-        }
-      );
-
-      if (!response.ok) {
-        let errorMessage =
-          'Assessment extraction failed.';
-
-        try {
-          const error =
-            await response.json();
-
-          errorMessage =
-            error.error ||
-            errorMessage;
-        } catch {
-          // Keep fallback error.
-        }
-
-        throw new Error(
-          errorMessage
-        );
-      }
-
-      const data =
-        await response.json();
-
-      if (
-        !data.questions ||
-        !Array.isArray(
-          data.questions
-        )
-      ) {
-        throw new Error(
-          'AI did not return valid questions.'
-        );
-      }
-
-      if (
-        !data.mappings ||
-        !Array.isArray(
-          data.mappings
-        )
-      ) {
-        throw new Error(
-          'AI did not return valid answer mappings.'
-        );
-      }
-
-      // =====================================================
-      // STEP 4: Calculate grading summary
-      // =====================================================
-
-      const totalMarks =
-        data.questions.reduce(
-          (
-            sum: number,
-            question: any
-          ) =>
-            sum +
-            (question.marks || 0),
-          0
-        );
-
-      const earnedMarks =
-        data.mappings.reduce(
-          (
-            sum: number,
-            mapping: any
-          ) =>
-            sum +
-            (mapping.score || 0),
-          0
-        );
-
-      const answeredCount =
-        data.mappings.filter(
-          (mapping: any) =>
-            mapping.status ===
-            'answered'
-        ).length;
-
-      // =====================================================
-      // STEP 5: Save assessment history
-      // =====================================================
-
-      addHistoryRecord({
-        id: `assess-${Date.now()}`,
-
-        createdAt:
-          new Date().toISOString(),
-
-        questionPaperName:
-          questionPaper.name,
-
-        answerSheetName:
-          answerSheet.name,
-
-        questionCount:
-          data.questions.length,
-
-        answeredCount,
-
-        totalMarks,
-
-        earnedMarks,
-
-        percentage:
-          totalMarks > 0
-            ? Math.round(
-                (earnedMarks /
-                  totalMarks) *
-                  100
               )
-            : 0,
-      });
+            : [
+                await fileToBase64(
+                  questionPaper
+                ),
+              ];
 
-      // =====================================================
-      // STEP 6: Save answer images in IndexedDB
-      // =====================================================
+        if (
+          rawQuestionImages.length ===
+          0
+        ) {
+          throw new Error(
+            'Could not read any question-paper pages.'
+          );
+        }
 
-      setLoadingLabel(
-        'Saving answer sheet...'
-      );
+        /*
+         * =====================================================
+         * STEP 2
+         * Optimize question images
+         * =====================================================
+         */
+        setLoadingLabel(
+          `Optimizing question pages...`
+        );
 
-      const imageStorageKey =
-        `answer-sheet-${Date.now()}-${Math.random()
-          .toString(36)
-          .slice(2, 10)}`;
+        const questionImages =
+          await optimizeImages(
+            rawQuestionImages,
+            (completed, total) => {
+              setLoadingLabel(
+                `Optimizing question pages ${completed}/${total}...`
+              );
+            }
+          );
 
-      await saveAnswerImages(
-        imageStorageKey,
-        answerImages
-      );
+        /*
+         * =====================================================
+         * STEP 3
+         * Convert answer sheet to page images
+         * =====================================================
+         */
+        setLoadingLabel(
+          'Reading answer sheet...'
+        );
 
-      // =====================================================
-      // STEP 7: Store lightweight result
-      // =====================================================
+        const rawAnswerImages =
+          answerSheet.type ===
+          'application/pdf'
+            ? await pdfToImages(
+                answerSheet
+              )
+            : [
+                await fileToBase64(
+                  answerSheet
+                ),
+              ];
 
-      const extractionResult = {
-        questions:
-          data.questions,
+        if (
+          rawAnswerImages.length ===
+          0
+        ) {
+          throw new Error(
+            'Could not read any answer-sheet pages.'
+          );
+        }
 
-        mappings:
-          data.mappings,
+        /*
+         * =====================================================
+         * STEP 4
+         * Optimize answer images
+         * =====================================================
+         */
+        setLoadingLabel(
+          `Optimizing answer pages...`
+        );
 
-        imageStorageKey,
-      };
+        const answerImages =
+          await optimizeImages(
+            rawAnswerImages,
+            (completed, total) => {
+              setLoadingLabel(
+                `Optimizing answer pages ${completed}/${total}...`
+              );
+            }
+          );
 
-      sessionStorage.setItem(
-        'extractionResult',
-        JSON.stringify(
-          extractionResult
-        )
-      );
+        /*
+         * =====================================================
+         * STEP 5
+         * Estimate request size
+         * =====================================================
+         */
+        const estimatedMB =
+          calculateBase64Size([
+            ...questionImages,
+            ...answerImages,
+          ]);
 
-      // =====================================================
-      // STEP 8: Navigate to results
-      // =====================================================
+        console.log(
+          '[Extraction] Optimized request size:',
+          `${estimatedMB} MB`
+        );
 
-      router.push('/results');
-    } catch (error: unknown) {
-      console.error(
-        'Extraction error:',
-        error
-      );
+        console.log(
+          '[Extraction] Question pages:',
+          questionImages.length
+        );
 
-      const message =
-        error instanceof Error
-          ? error.message
-          : 'An error occurred during extraction.';
+        console.log(
+          '[Extraction] Answer pages:',
+          answerImages.length
+        );
 
-      setSubmitError(message);
-      setLoading(false);
-    }
-  };
+        /*
+         * =====================================================
+         * IMPORTANT
+         *
+         * DO NOT append the original PDF files.
+         *
+         * The API route only reads:
+         *   questionImages
+         *   answerImages
+         *
+         * Sending the original PDFs as well was unnecessarily
+         * increasing the Vercel request payload.
+         * =====================================================
+         */
+
+        setLoadingLabel(
+          'AI is analysing the assessment...'
+        );
+
+        const formData =
+          new FormData();
+
+        formData.append(
+          'questionImages',
+          JSON.stringify(
+            questionImages
+          )
+        );
+
+        formData.append(
+          'answerImages',
+          JSON.stringify(
+            answerImages
+          )
+        );
+
+        /*
+         * =====================================================
+         * STEP 6
+         * Call extraction API
+         * =====================================================
+         */
+        const response =
+          await fetch(
+            '/api/extract',
+            {
+              method: 'POST',
+              body: formData,
+            }
+          );
+
+        /*
+         * Explicitly handle Vercel's payload-size error.
+         */
+        if (
+          response.status === 413
+        ) {
+          throw new Error(
+            'The assessment is too large to process in one request. Please use a smaller scan or fewer/high-resolution pages.'
+          );
+        }
+
+        if (!response.ok) {
+          let errorMessage =
+            'Assessment extraction failed.';
+
+          try {
+            const error =
+              await response.json();
+
+            errorMessage =
+              error.error ||
+              errorMessage;
+          } catch {
+            // Keep fallback message.
+          }
+
+          throw new Error(
+            errorMessage
+          );
+        }
+
+        const data =
+          await response.json();
+
+        /*
+         * =====================================================
+         * STEP 7
+         * Validate AI result
+         * =====================================================
+         */
+        if (
+          !data.questions ||
+          !Array.isArray(
+            data.questions
+          )
+        ) {
+          throw new Error(
+            'AI did not return valid questions.'
+          );
+        }
+
+        if (
+          !data.mappings ||
+          !Array.isArray(
+            data.mappings
+          )
+        ) {
+          throw new Error(
+            'AI did not return valid answer mappings.'
+          );
+        }
+
+        /*
+         * =====================================================
+         * STEP 8
+         * Calculate grading summary
+         * =====================================================
+         */
+        const totalMarks =
+          data.questions.reduce(
+            (
+              sum: number,
+              question: any
+            ) =>
+              sum +
+              Number(
+                question.marks || 0
+              ),
+            0
+          );
+
+        const earnedMarks =
+          data.mappings.reduce(
+            (
+              sum: number,
+              mapping: any
+            ) =>
+              sum +
+              Number(
+                mapping.score || 0
+              ),
+            0
+          );
+
+        const answeredCount =
+          data.mappings.filter(
+            (mapping: any) =>
+              mapping.status ===
+              'answered'
+          ).length;
+
+        /*
+         * =====================================================
+         * STEP 9
+         * Save history
+         * =====================================================
+         */
+        addHistoryRecord({
+          id: `assess-${Date.now()}`,
+
+          createdAt:
+            new Date().toISOString(),
+
+          questionPaperName:
+            questionPaper.name,
+
+          answerSheetName:
+            answerSheet.name,
+
+          questionCount:
+            data.questions.length,
+
+          answeredCount,
+
+          totalMarks,
+
+          earnedMarks,
+
+          percentage:
+            totalMarks > 0
+              ? Math.round(
+                  (earnedMarks /
+                    totalMarks) *
+                    100
+                )
+              : 0,
+        });
+
+        /*
+         * =====================================================
+         * STEP 10
+         * Save answer images in IndexedDB
+         *
+         * Keep this client-side because the results page
+         * needs the original answer-sheet pages.
+         * =====================================================
+         */
+        setLoadingLabel(
+          'Saving answer sheet...'
+        );
+
+        const imageStorageKey =
+          `answer-sheet-${Date.now()}-${Math.random()
+            .toString(36)
+            .slice(2, 10)}`;
+
+        await saveAnswerImages(
+          imageStorageKey,
+          answerImages
+        );
+
+        /*
+         * =====================================================
+         * STEP 11
+         * Store lightweight result
+         *
+         * Never store the base64 images in sessionStorage.
+         * =====================================================
+         */
+        const extractionResult = {
+          questions:
+            data.questions,
+
+          mappings:
+            data.mappings,
+
+          imageStorageKey,
+        };
+
+        sessionStorage.setItem(
+          'extractionResult',
+          JSON.stringify(
+            extractionResult
+          )
+        );
+
+        /*
+         * =====================================================
+         * STEP 12
+         * Navigate to results
+         * =====================================================
+         */
+        router.push(
+          '/results'
+        );
+      } catch (
+        error: unknown
+      ) {
+        console.error(
+          '[Extraction] Error:',
+          error
+        );
+
+        const message =
+          error instanceof Error
+            ? error.message
+            : 'An unexpected error occurred during extraction.';
+
+        setSubmitError(
+          message
+        );
+
+        setLoading(false);
+      }
+    };
 
   if (loading) {
     return (
@@ -711,12 +1067,20 @@ export default function Home() {
   }
 
   const bothUploaded =
-    !!questionPaper &&
-    !!answerSheet;
+    Boolean(
+      questionPaper
+    ) &&
+    Boolean(
+      answerSheet
+    );
 
   const uploadedCount =
-    Number(Boolean(questionPaper)) +
-    Number(Boolean(answerSheet));
+    Number(
+      Boolean(questionPaper)
+    ) +
+    Number(
+      Boolean(answerSheet)
+    );
 
   const canSubmit =
     bothUploaded &&
@@ -732,7 +1096,8 @@ export default function Home() {
         (part) =>
           part[0]?.toUpperCase()
       )
-      .join('') || 'T';
+      .join('') ||
+    'T';
 
   return (
     <div className="flex h-screen overflow-hidden bg-[#f7f7f8] text-gray-950">
@@ -742,7 +1107,6 @@ export default function Home() {
         {/* =================================================
             TOP BAR
         ================================================= */}
-
         <header className="sticky top-0 z-30 border-b border-gray-200/80 bg-white/90 backdrop-blur-xl">
           <div className="flex min-h-[72px] items-center justify-between px-6 sm:px-8">
             <div className="flex items-center gap-3">
@@ -760,6 +1124,7 @@ export default function Home() {
 
               <div className="hidden items-center gap-2 rounded-full bg-gray-100 px-3 py-1.5 sm:flex">
                 <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+
                 <span className="text-[11px] font-semibold text-gray-600">
                   Workspace ready
                 </span>
@@ -789,16 +1154,17 @@ export default function Home() {
         {/* =================================================
             PAGE CONTENT
         ================================================= */}
-
         <div className="mx-auto w-full max-w-[1380px] px-5 py-7 sm:px-8 lg:px-10 lg:py-9">
+
           {/* =================================================
               HERO
           ================================================= */}
-
           <section className="mb-7">
             <div className="grid gap-6 lg:grid-cols-[1fr_360px]">
+
+              {/* Main hero */}
               <div className="relative overflow-hidden rounded-[30px] bg-gray-950 px-7 py-8 text-white shadow-2xl shadow-gray-900/10 sm:px-9 sm:py-10">
-                {/* Decorative grid */}
+
                 <div
                   className="pointer-events-none absolute inset-0 opacity-[0.07]"
                   style={{
@@ -810,6 +1176,8 @@ export default function Home() {
                 />
 
                 <div className="pointer-events-none absolute -right-20 -top-20 h-64 w-64 rounded-full bg-orange-500/20 blur-3xl" />
+
+                <div className="pointer-events-none absolute -bottom-24 left-1/3 h-56 w-56 rounded-full bg-violet-600/10 blur-3xl" />
 
                 <div className="relative">
                   <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.07] px-3 py-1.5">
@@ -828,24 +1196,26 @@ export default function Home() {
                   </h2>
 
                   <p className="mt-4 max-w-xl text-sm leading-6 text-gray-400">
-                    Upload the question paper and a handwritten
-                    answer sheet. VedaAI will extract questions,
-                    locate responses, and prepare the assessment
-                    workspace for review.
+                    Upload the question paper and handwritten
+                    answer sheet. VedaAI extracts questions,
+                    locates student responses, and prepares
+                    everything for review.
                   </p>
 
                   <div className="mt-7 flex flex-wrap items-center gap-3">
                     <div className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.06] px-3 py-2">
                       <ShieldCheck className="h-4 w-4 text-emerald-400" />
+
                       <span className="text-xs font-medium text-gray-300">
                         Files checked before processing
                       </span>
                     </div>
 
                     <div className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.06] px-3 py-2">
-                      <Clock3 className="h-4 w-4 text-orange-400" />
+                      <Zap className="h-4 w-4 text-orange-400" />
+
                       <span className="text-xs font-medium text-gray-300">
-                        AI-assisted analysis
+                        Optimized AI processing
                       </span>
                     </div>
                   </div>
@@ -934,7 +1304,9 @@ export default function Home() {
                         ? 'Ready to start analysis'
                         : 'Unlocks after both files'
                     }
-                    active={bothUploaded}
+                    active={
+                      bothUploaded
+                    }
                   />
                 </div>
               </div>
@@ -944,7 +1316,6 @@ export default function Home() {
           {/* =================================================
               UPLOAD SECTION
           ================================================= */}
-
           <section>
             <div className="mb-5 flex flex-col justify-between gap-3 sm:flex-row sm:items-end">
               <div>
@@ -957,13 +1328,15 @@ export default function Home() {
                 </h3>
 
                 <p className="mt-1 text-sm text-gray-500">
-                  The order does not matter. VedaAI handles the mapping.
+                  Upload in any order. VedaAI handles the extraction
+                  and mapping automatically.
                 </p>
               </div>
 
               {bothUploaded && (
                 <div className="inline-flex w-fit items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700">
                   <Check className="h-3.5 w-3.5" />
+
                   Both documents are ready
                 </div>
               )}
@@ -1017,7 +1390,6 @@ export default function Home() {
           {/* =================================================
               ACTION BAR
           ================================================= */}
-
           <section className="mt-5">
             <div
               className={`overflow-hidden rounded-[26px] border transition-all ${
@@ -1063,7 +1435,9 @@ export default function Home() {
 
                 <button
                   type="button"
-                  onClick={handleSubmit}
+                  onClick={
+                    handleSubmit
+                  }
                   disabled={
                     !canSubmit ||
                     loading
@@ -1075,9 +1449,7 @@ export default function Home() {
                   }`}
                 >
                   <span>
-                    {canSubmit
-                      ? 'Start AI Mapping'
-                      : 'Start AI Mapping'}
+                    Start AI Mapping
                   </span>
 
                   <ArrowRight
@@ -1110,7 +1482,9 @@ export default function Home() {
                     <button
                       type="button"
                       onClick={() =>
-                        setSubmitError(null)
+                        setSubmitError(
+                          null
+                        )
                       }
                       className="text-xs font-semibold text-red-600 hover:text-red-800"
                     >
@@ -1125,7 +1499,6 @@ export default function Home() {
           {/* =================================================
               WHAT HAPPENS NEXT
           ================================================= */}
-
           <section className="mt-8 grid gap-5 lg:grid-cols-[1fr_330px]">
             <div className="rounded-[26px] border border-gray-200 bg-white p-6 shadow-sm">
               <div className="mb-6 flex items-start justify-between">
@@ -1170,8 +1543,8 @@ export default function Home() {
                   </p>
 
                   <p className="mt-1.5 text-xs leading-5 text-gray-500">
-                    Responses are mapped to the exact handwritten
-                    regions where possible.
+                    Responses are mapped to the handwritten regions
+                    where possible.
                   </p>
                 </div>
 
@@ -1195,7 +1568,7 @@ export default function Home() {
             {/* Helpful note */}
             <div className="rounded-[26px] border border-gray-200 bg-[#fffaf5] p-6 shadow-sm">
               <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-orange-100 text-orange-600">
-                <ShieldCheck className="h-5 w-5" />
+                <ImageIcon className="h-5 w-5" />
               </div>
 
               <h3 className="mt-5 text-base font-bold text-gray-950">
@@ -1203,9 +1576,9 @@ export default function Home() {
               </h3>
 
               <p className="mt-2 text-xs leading-5 text-gray-600">
-                For handwritten answers, use a clear scan or
-                well-lit photo. Keep the entire page visible and
-                avoid heavy shadows or cropped margins.
+                For handwritten answers, use a clear scan or well-lit
+                photo. Keep the entire page visible and avoid heavy
+                shadows or cropped margins.
               </p>
 
               <div className="mt-5 space-y-2.5">
@@ -1228,23 +1601,35 @@ export default function Home() {
           </section>
 
           {/* =================================================
-              FOOTER STATUS
+              FOOTER
           ================================================= */}
-
           <footer className="mt-8 flex flex-col gap-3 border-t border-gray-200 py-6 text-[11px] text-gray-400 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex items-center gap-2">
               <div className="h-2 w-2 rounded-full bg-emerald-500" />
+
               <span>
                 Assessment workspace is ready
               </span>
             </div>
 
             <div className="flex items-center gap-3">
-              <span>PDF & image input</span>
-              <span className="text-gray-300">•</span>
-              <span>AI extraction</span>
-              <span className="text-gray-300">•</span>
-              <span>Answer mapping</span>
+              <span>PDF &amp; image input</span>
+
+              <span className="text-gray-300">
+                •
+              </span>
+
+              <span>
+                AI extraction
+              </span>
+
+              <span className="text-gray-300">
+                •
+              </span>
+
+              <span>
+                Answer mapping
+              </span>
             </div>
           </footer>
         </div>
