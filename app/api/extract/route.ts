@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { saveAnswerImages } from '@/lib/image-storage';
 
 import {
   extractQuestions,
@@ -8,161 +7,301 @@ import {
 
 export const maxDuration = 60;
 
-export async function POST(request: NextRequest) {
+/**
+ * Vercel serverless functions have request payload limits.
+ *
+ * The frontend therefore sends the answer/question pages in small
+ * batches instead of sending the entire document as one huge request.
+ *
+ * Supported modes:
+ *
+ *   questions
+ *      Extract questions from one chunk of question-paper pages.
+ *
+ *   answers
+ *      Extract/map answers from one chunk of answer-sheet pages.
+ *
+ * The frontend combines the responses.
+ */
+
+type ExtractionMode = 'questions' | 'answers';
+
+function parseStringArray(value: FormDataEntryValue | null): string[] {
+  if (!value || typeof value !== 'string') {
+    return [];
+  }
+
   try {
+    const parsed = JSON.parse(value);
+
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+
+    return parsed.filter(
+      (item): item is string =>
+        typeof item === 'string' && item.length > 0
+    );
+  } catch {
+    return [];
+  }
+}
+
+function parseQuestions(value: FormDataEntryValue | null): any[] {
+  if (!value || typeof value !== 'string') {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(value);
+
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function getMode(formData: FormData): ExtractionMode | null {
+  const rawMode = formData.get('mode');
+
+  if (rawMode === 'questions' || rawMode === 'answers') {
+    return rawMode;
+  }
+
+  return null;
+}
+
+export async function POST(request: NextRequest) {
+  const requestId = crypto.randomUUID();
+
+  try {
+    console.log(
+      `[Extraction:${requestId}] Request received`
+    );
+
     const formData = await request.formData();
 
-    const questionImagesRaw =
-      formData.get('questionImages');
+    const mode = getMode(formData);
 
-    const answerImagesRaw =
-      formData.get('answerImages');
-
-    if (!questionImagesRaw || !answerImagesRaw) {
+    if (!mode) {
       return NextResponse.json(
         {
-          error: 'Missing question or answer images',
-        },
-        { status: 400 }
-      );
-    }
-
-    let questionImages: string[];
-    let answerImages: string[];
-
-    try {
-      questionImages = JSON.parse(
-        questionImagesRaw as string
-      );
-
-      answerImages = JSON.parse(
-        answerImagesRaw as string
-      );
-    } catch (error) {
-      console.error(
-        '[Extraction] Failed to parse image data:',
-        error
-      );
-
-      return NextResponse.json(
-        {
+          success: false,
           error:
-            'Invalid image data. Expected valid JSON arrays.',
+            'Missing or invalid extraction mode. Use "questions" or "answers".',
         },
         { status: 400 }
       );
     }
 
-    if (
-      !Array.isArray(questionImages) ||
-      !Array.isArray(answerImages)
-    ) {
-      return NextResponse.json(
+    /*
+     * ============================================================
+     * QUESTION EXTRACTION
+     * ============================================================
+     */
+
+    if (mode === 'questions') {
+      const questionImages = parseStringArray(
+        formData.get('questionImages')
+      );
+
+      const startPageRaw = formData.get('startPage');
+      const startPage =
+        typeof startPageRaw === 'string'
+          ? Number(startPageRaw)
+          : 0;
+
+      if (questionImages.length === 0) {
+        return NextResponse.json(
+          {
+            success: false,
+            error:
+              'No question-paper images were provided.',
+          },
+          { status: 400 }
+        );
+      }
+
+      console.log(
+        `[Extraction:${requestId}] Extracting question chunk`,
         {
-          error:
-            'questionImages and answerImages must be arrays.',
-        },
-        { status: 400 }
+          pages: questionImages.length,
+          startPage,
+        }
       );
-    }
 
-    if (questionImages.length === 0) {
-      return NextResponse.json(
-        {
-          error:
-            'No question paper images were provided.',
-        },
-        { status: 400 }
-      );
-    }
-
-    if (answerImages.length === 0) {
-      return NextResponse.json(
-        {
-          error:
-            'No answer sheet images were provided.',
-        },
-        { status: 400 }
-      );
-    }
-
-    console.log(
-      '[Extraction] Starting extraction...'
-    );
-
-    console.log(
-      '[Extraction] Question pages:',
-      questionImages.length
-    );
-
-    console.log(
-      '[Extraction] Answer pages:',
-      answerImages.length
-    );
-
-    // ========================================================
-    // STEP 1: Extract questions
-    // ========================================================
-
-    const questions =
-      await extractQuestions(
+      const questions = await extractQuestions(
         questionImages
       );
 
-    if (questions.length === 0) {
+      /*
+       * Preserve the original page information when possible.
+       *
+       * extractQuestions normally returns question objects.
+       * We attach a chunk offset so the frontend can retain
+       * ordering across multiple API requests.
+       */
+
+      const questionsWithChunkInfo = questions.map(
+        (question: any, index: number) => ({
+          ...question,
+
+          /*
+           * Don't overwrite an existing page field.
+           */
+          sourcePage:
+            typeof question.sourcePage === 'number'
+              ? question.sourcePage
+              : startPage + index,
+        })
+      );
+
+      console.log(
+        `[Extraction:${requestId}] Questions extracted:`,
+        questionsWithChunkInfo.length
+      );
+
       return NextResponse.json(
         {
-          error:
-            'No questions could be extracted from the question paper. Try a clearer scan or a different file.',
+          success: true,
+          mode: 'questions',
+          questions: questionsWithChunkInfo,
         },
-        { status: 422 }
+        { status: 200 }
       );
     }
 
-    console.log(
-      '[Extraction] Questions extracted:',
-      questions.length
-    );
+    /*
+     * ============================================================
+     * ANSWER EXTRACTION + MAPPING
+     * ============================================================
+     */
 
-    // ========================================================
-    // STEP 2: Extract and map answers
-    // ========================================================
+    if (mode === 'answers') {
+      const answerImages = parseStringArray(
+        formData.get('answerImages')
+      );
 
-    const mappings =
-      await extractAndMapAnswers(
+      const questions = parseQuestions(
+        formData.get('questions')
+      );
+
+      const startPageRaw = formData.get('startPage');
+
+      const startPage =
+        typeof startPageRaw === 'string'
+          ? Number(startPageRaw)
+          : 0;
+
+      if (answerImages.length === 0) {
+        return NextResponse.json(
+          {
+            success: false,
+            error:
+              'No answer-sheet images were provided.',
+          },
+          { status: 400 }
+        );
+      }
+
+      if (questions.length === 0) {
+        return NextResponse.json(
+          {
+            success: false,
+            error:
+              'No extracted questions were provided for answer mapping.',
+          },
+          { status: 400 }
+        );
+      }
+
+      console.log(
+        `[Extraction:${requestId}] Mapping answer chunk`,
+        {
+          pages: answerImages.length,
+          startPage,
+          questions: questions.length,
+        }
+      );
+
+      const mappings = await extractAndMapAnswers(
         answerImages,
         questions
       );
 
-    console.log(
-      '[Extraction] Answer mappings created:',
-      mappings.length
-    );
+      /*
+       * The AI sees only the current chunk, so make sure the
+       * returned answer regions retain their absolute page index.
+       *
+       * If the mapping already contains a page property, offset it
+       * by the starting page of this chunk.
+       */
 
-    // ========================================================
-    // STEP 3: Return result
-    // ========================================================
+      const normalizedMappings = mappings.map(
+        (mapping: any) => {
+          if (
+            typeof mapping.page === 'number'
+          ) {
+            return {
+              ...mapping,
+              page:
+                mapping.page < startPage
+                  ? mapping.page + startPage
+                  : mapping.page,
+            };
+          }
 
-    return NextResponse.json(
-      {
-        success: true,
-        questions,
-        mappings,
-      },
-      { status: 200 }
-    );
-  } catch (error: any) {
-    console.error(
-      '[Extraction] Error:',
-      error
-    );
+          if (
+            typeof mapping.answerPage === 'number'
+          ) {
+            return {
+              ...mapping,
+              page:
+                mapping.answerPage + startPage,
+            };
+          }
+
+          return mapping;
+        }
+      );
+
+      console.log(
+        `[Extraction:${requestId}] Mappings created:`,
+        normalizedMappings.length
+      );
+
+      return NextResponse.json(
+        {
+          success: true,
+          mode: 'answers',
+          mappings: normalizedMappings,
+        },
+        { status: 200 }
+      );
+    }
 
     return NextResponse.json(
       {
         success: false,
-        error:
-          error?.message ||
-          'An error occurred during extraction.',
+        error: 'Unsupported extraction mode.',
+      },
+      { status: 400 }
+    );
+  } catch (error: unknown) {
+    console.error(
+      `[Extraction:${requestId}] Error:`,
+      error
+    );
+
+    const message =
+      error instanceof Error
+        ? error.message
+        : 'An error occurred during extraction.';
+
+    return NextResponse.json(
+      {
+        success: false,
+        error: message,
       },
       { status: 500 }
     );
