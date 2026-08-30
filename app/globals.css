@@ -1,7 +1,12 @@
 @import "tailwindcss";
 
+/* Without this, tailwind.config.ts (custom colors, animate-fade-in/slide-up/
+   scale-in used throughout the app) is silently ignored under Tailwind v4's
+   CSS-first config — this line is what actually turns it on. */
+@config "../tailwind.config.ts";
+
 :root {
-  --background: #ffffff;
+  --background: #fafaf9;
   --foreground: #171717;
 }
 
@@ -22,5 +27,7 @@
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  /* Was hardcoded to "Arial, Helvetica, sans-serif", which silently
+     overrode the Geist font loaded in layout.tsx. */
+  font-family: var(--font-sans), Arial, Helvetica, sans-serif;
 }
