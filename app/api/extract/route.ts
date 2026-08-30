@@ -1,309 +1,366 @@
-import { NextRequest, NextResponse } from 'next/server';
+// app/api/extract/route.ts
 
 import {
-  extractQuestions,
-  extractAndMapAnswers,
-} from '@/lib/mistral';
+  NextRequest,
+  NextResponse,
+} from "next/server";
+
+import {
+  ocrImages,
+  extractQuestionsFromOcr,
+  mapAndGradeAnswersFromOcr,
+  OcrPageResult,
+} from "@/lib/mistral";
+
+export const runtime = "nodejs";
 
 export const maxDuration = 60;
 
-/**
- * Vercel serverless functions have request payload limits.
- *
- * The frontend therefore sends the answer/question pages in small
- * batches instead of sending the entire document as one huge request.
- *
- * Supported modes:
- *
- *   questions
- *      Extract questions from one chunk of question-paper pages.
- *
- *   answers
- *      Extract/map answers from one chunk of answer-sheet pages.
- *
- * The frontend combines the responses.
- */
+function jsonError(
+  message: string,
+  status = 400
+) {
+  return NextResponse.json(
+    {
+      success: false,
+      error: message,
+    },
+    {
+      status,
+    }
+  );
+}
 
-type ExtractionMode = 'questions' | 'answers';
+function parseImages(
+  value: FormDataEntryValue | null,
+  fieldName: string
+): string[] {
+  if (
+    typeof value !==
+    "string"
+  ) {
+    throw new Error(
+      `${fieldName} must be a JSON string.`
+    );
+  }
 
-function parseStringArray(value: FormDataEntryValue | null): string[] {
-  if (!value || typeof value !== 'string') {
-    return [];
+  let parsed: unknown;
+
+  try {
+    parsed =
+      JSON.parse(value);
+  } catch {
+    throw new Error(
+      `${fieldName} contains invalid JSON.`
+    );
+  }
+
+  if (
+    !Array.isArray(parsed)
+  ) {
+    throw new Error(
+      `${fieldName} must be an array.`
+    );
+  }
+
+  const images =
+    parsed.filter(
+      (item) =>
+        typeof item ===
+          "string" &&
+        item.length > 0
+    );
+
+  if (
+    images.length === 0
+  ) {
+    throw new Error(
+      `No ${fieldName} were provided.`
+    );
+  }
+
+  return images;
+}
+
+function parseJson<T>(
+  value: FormDataEntryValue | null,
+  fieldName: string
+): T {
+  if (
+    typeof value !==
+    "string"
+  ) {
+    throw new Error(
+      `${fieldName} is required.`
+    );
   }
 
   try {
-    const parsed = JSON.parse(value);
+    return JSON.parse(
+      value
+    ) as T;
+  } catch {
+    throw new Error(
+      `${fieldName} contains invalid JSON.`
+    );
+  }
+}
 
-    if (!Array.isArray(parsed)) {
-      return [];
+export async function POST(
+  request: NextRequest
+) {
+  try {
+    if (
+      !process.env.MISTRAL_API_KEY
+    ) {
+      return jsonError(
+        "MISTRAL_API_KEY is not configured on Vercel. Add it to the Production environment and redeploy.",
+        500
+      );
     }
 
-    return parsed.filter(
-      (item): item is string =>
-        typeof item === 'string' && item.length > 0
-    );
-  } catch {
-    return [];
-  }
-}
+    const formData =
+      await request.formData();
 
-function parseQuestions(value: FormDataEntryValue | null): any[] {
-  if (!value || typeof value !== 'string') {
-    return [];
-  }
+    const modeValue =
+      formData.get("mode");
 
-  try {
-    const parsed = JSON.parse(value);
+    const mode =
+      typeof modeValue ===
+      "string"
+        ? modeValue
+        : "full";
 
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
-
-function getMode(formData: FormData): ExtractionMode | null {
-  const rawMode = formData.get('mode');
-
-  if (rawMode === 'questions' || rawMode === 'answers') {
-    return rawMode;
-  }
-
-  return null;
-}
-
-export async function POST(request: NextRequest) {
-  const requestId = crypto.randomUUID();
-
-  try {
     console.log(
-      `[Extraction:${requestId}] Request received`
+      `[Extraction] mode=${mode}`
     );
 
-    const formData = await request.formData();
+    /*
+     * ============================================================
+     * QUESTIONS
+     * ============================================================
+     */
+    if (
+      mode === "questions"
+    ) {
+      const images =
+        parseImages(
+          formData.get(
+            "questionImages"
+          ),
+          "questionImages"
+        );
 
-    const mode = getMode(formData);
+      const pageOffset =
+        Number(
+          formData.get(
+            "pageOffset"
+          ) || 0
+        );
 
-    if (!mode) {
-      return NextResponse.json(
-        {
-          success: false,
-          error:
-            'Missing or invalid extraction mode. Use "questions" or "answers".',
-        },
-        { status: 400 }
-      );
+      const pages =
+        await ocrImages(
+          images,
+          Number.isFinite(
+            pageOffset
+          )
+            ? pageOffset
+            : 0
+        );
+
+      const questions =
+        await extractQuestionsFromOcr(
+          pages
+        );
+
+      return NextResponse.json({
+        success: true,
+        mode: "questions",
+        questions,
+      });
     }
 
     /*
      * ============================================================
-     * QUESTION EXTRACTION
+     * ANSWER OCR
      * ============================================================
      */
-
-    if (mode === 'questions') {
-      const questionImages = parseStringArray(
-        formData.get('questionImages')
-      );
-
-      const startPageRaw = formData.get('startPage');
-      const startPage =
-        typeof startPageRaw === 'string'
-          ? Number(startPageRaw)
-          : 0;
-
-      if (questionImages.length === 0) {
-        return NextResponse.json(
-          {
-            success: false,
-            error:
-              'No question-paper images were provided.',
-          },
-          { status: 400 }
+    if (
+      mode === "answer-ocr"
+    ) {
+      const images =
+        parseImages(
+          formData.get(
+            "answerImages"
+          ),
+          "answerImages"
         );
-      }
 
-      console.log(
-        `[Extraction:${requestId}] Extracting question chunk`,
-        {
-          pages: questionImages.length,
-          startPage,
-        }
-      );
+      const pageOffset =
+        Number(
+          formData.get(
+            "pageOffset"
+          ) || 0
+        );
 
-      const questions = await extractQuestions(
-        questionImages
-      );
+      const pages =
+        await ocrImages(
+          images,
+          Number.isFinite(
+            pageOffset
+          )
+            ? pageOffset
+            : 0
+        );
 
-      /*
-       * Preserve the original page information when possible.
-       *
-       * extractQuestions normally returns question objects.
-       * We attach a chunk offset so the frontend can retain
-       * ordering across multiple API requests.
-       */
-
-      const questionsWithChunkInfo = questions.map(
-        (question: any, index: number) => ({
-          ...question,
-
-          /*
-           * Don't overwrite an existing page field.
-           */
-          sourcePage:
-            typeof question.sourcePage === 'number'
-              ? question.sourcePage
-              : startPage + index,
-        })
-      );
-
-      console.log(
-        `[Extraction:${requestId}] Questions extracted:`,
-        questionsWithChunkInfo.length
-      );
-
-      return NextResponse.json(
-        {
-          success: true,
-          mode: 'questions',
-          questions: questionsWithChunkInfo,
-        },
-        { status: 200 }
-      );
+      return NextResponse.json({
+        success: true,
+        mode: "answer-ocr",
+        pages,
+      });
     }
 
     /*
      * ============================================================
-     * ANSWER EXTRACTION + MAPPING
+     * FINAL GRADING
      * ============================================================
      */
+    if (
+      mode === "grade"
+    ) {
+      const questions =
+        parseJson<any[]>(
+          formData.get(
+            "questions"
+          ),
+          "questions"
+        );
 
-    if (mode === 'answers') {
-      const answerImages = parseStringArray(
-        formData.get('answerImages')
-      );
+      const pages =
+        parseJson<OcrPageResult[]>(
+          formData.get(
+            "pages"
+          ),
+          "pages"
+        );
 
-      const questions = parseQuestions(
-        formData.get('questions')
-      );
-
-      const startPageRaw = formData.get('startPage');
-
-      const startPage =
-        typeof startPageRaw === 'string'
-          ? Number(startPageRaw)
-          : 0;
-
-      if (answerImages.length === 0) {
-        return NextResponse.json(
-          {
-            success: false,
-            error:
-              'No answer-sheet images were provided.',
-          },
-          { status: 400 }
+      if (
+        !Array.isArray(
+          questions
+        ) ||
+        questions.length ===
+          0
+      ) {
+        return jsonError(
+          "No questions were supplied for grading."
         );
       }
 
-      if (questions.length === 0) {
-        return NextResponse.json(
-          {
-            success: false,
-            error:
-              'No extracted questions were provided for answer mapping.',
-          },
-          { status: 400 }
+      if (
+        !Array.isArray(pages) ||
+        pages.length ===
+          0
+      ) {
+        return jsonError(
+          "No answer OCR pages were supplied for grading."
         );
       }
 
-      console.log(
-        `[Extraction:${requestId}] Mapping answer chunk`,
-        {
-          pages: answerImages.length,
-          startPage,
-          questions: questions.length,
-        }
-      );
+      const mappings =
+        await mapAndGradeAnswersFromOcr(
+          pages,
+          questions
+        );
 
-      const mappings = await extractAndMapAnswers(
-        answerImages,
-        questions
-      );
-
-      /*
-       * The AI sees only the current chunk, so make sure the
-       * returned answer regions retain their absolute page index.
-       *
-       * If the mapping already contains a page property, offset it
-       * by the starting page of this chunk.
-       */
-
-      const normalizedMappings = mappings.map(
-        (mapping: any) => {
-          if (
-            typeof mapping.page === 'number'
-          ) {
-            return {
-              ...mapping,
-              page:
-                mapping.page < startPage
-                  ? mapping.page + startPage
-                  : mapping.page,
-            };
-          }
-
-          if (
-            typeof mapping.answerPage === 'number'
-          ) {
-            return {
-              ...mapping,
-              page:
-                mapping.answerPage + startPage,
-            };
-          }
-
-          return mapping;
-        }
-      );
-
-      console.log(
-        `[Extraction:${requestId}] Mappings created:`,
-        normalizedMappings.length
-      );
-
-      return NextResponse.json(
-        {
-          success: true,
-          mode: 'answers',
-          mappings: normalizedMappings,
-        },
-        { status: 200 }
-      );
+      return NextResponse.json({
+        success: true,
+        mode: "grade",
+        mappings,
+      });
     }
 
-    return NextResponse.json(
-      {
-        success: false,
-        error: 'Unsupported extraction mode.',
-      },
-      { status: 400 }
+    /*
+     * ============================================================
+     * FULL / BACKWARD COMPATIBILITY
+     * ============================================================
+     */
+    if (
+      mode === "full"
+    ) {
+      const questionImages =
+        parseImages(
+          formData.get(
+            "questionImages"
+          ),
+          "questionImages"
+        );
+
+      const answerImages =
+        parseImages(
+          formData.get(
+            "answerImages"
+          ),
+          "answerImages"
+        );
+
+      const questionPages =
+        await ocrImages(
+          questionImages,
+          0
+        );
+
+      const questions =
+        await extractQuestionsFromOcr(
+          questionPages
+        );
+
+      if (
+        questions.length ===
+        0
+      ) {
+        return jsonError(
+          "No questions could be extracted from the question paper.",
+          422
+        );
+      }
+
+      const answerPages =
+        await ocrImages(
+          answerImages,
+          0
+        );
+
+      const mappings =
+        await mapAndGradeAnswersFromOcr(
+          answerPages,
+          questions
+        );
+
+      return NextResponse.json({
+        success: true,
+        mode: "full",
+        questions,
+        mappings,
+      });
+    }
+
+    return jsonError(
+      `Unsupported extraction mode: ${mode}`
     );
   } catch (error: unknown) {
     console.error(
-      `[Extraction:${requestId}] Error:`,
+      "[Extraction] Error:",
       error
     );
 
     const message =
       error instanceof Error
         ? error.message
-        : 'An error occurred during extraction.';
+        : "An error occurred during extraction.";
 
-    return NextResponse.json(
-      {
-        success: false,
-        error: message,
-      },
-      { status: 500 }
+    return jsonError(
+      message,
+      500
     );
   }
 }
