@@ -1,12 +1,8 @@
-````md
 <p align="center">
   <img src="./PAGELAYOUT.png" alt="VedaAI Assessment Studio" width="100%">
 </p>
 
 # VedaAI
-
-AI-powered assessment platform for question extraction, answer mapping, OCR analysis, and automated grading.
-# VedaAI — AI Assessment Extraction & Answer Mapping
 
 AI-powered assessment evaluation for teachers. Upload a question paper and a handwritten answer sheet, automatically extract and map questions to answers, highlight the exact answer locations, and review AI-assisted grading in one workspace.
 
