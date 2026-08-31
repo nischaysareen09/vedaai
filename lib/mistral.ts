@@ -8,11 +8,15 @@ import {
   AnswerRegion,
 } from "./types";
 
+/* ============================================================
+ * CONFIGURATION
+ * ============================================================ */
+
 const apiKey = process.env.MISTRAL_API_KEY;
 
 if (!apiKey) {
   console.warn(
-    "[Mistral] MISTRAL_API_KEY is not set."
+    "[Mistral] MISTRAL_API_KEY is not set. Requests to Mistral will fail."
   );
 }
 
@@ -22,6 +26,10 @@ const client = new Mistral({
 
 const OCR_MODEL = "mistral-ocr-latest";
 const TEXT_MODEL = "mistral-small-latest";
+
+/* ============================================================
+ * TYPES
+ * ============================================================ */
 
 export interface OcrBlock {
   id: string;
@@ -45,7 +53,11 @@ export interface OcrPageResult {
   blocks: OcrBlock[];
 }
 
-function ensureApiKey() {
+/* ============================================================
+ * API KEY
+ * ============================================================ */
+
+function ensureApiKey(): void {
   if (!process.env.MISTRAL_API_KEY) {
     throw new Error(
       "MISTRAL_API_KEY is not configured on the server. Add it to Vercel Environment Variables and redeploy."
@@ -53,11 +65,107 @@ function ensureApiKey() {
   }
 }
 
+/* ============================================================
+ * SAFE OCR BLOCK PARSING
+ * ============================================================ */
+
+/**
+ * Mistral's OCR SDK exposes page.blocks as a union of many
+ * possible block types.
+ *
+ * Not every block type has:
+ * - content
+ * - topLeftX
+ * - topLeftY
+ * - bottomRightX
+ * - bottomRightY
+ *
+ * Therefore we deliberately treat incoming blocks as unknown
+ * and validate the properties we actually need.
+ */
+function isRecord(
+  value: unknown
+): value is Record<string, unknown> {
+  return (
+    typeof value === "object" &&
+    value !== null
+  );
+}
+
+function parseOcrBlocks(
+  rawBlocks: readonly unknown[],
+  pageNumber: number
+): OcrBlock[] {
+  const blocks: OcrBlock[] = [];
+
+  rawBlocks.forEach(
+    (
+      rawBlock: unknown,
+      blockIndex: number
+    ) => {
+      if (!isRecord(rawBlock)) {
+        return;
+      }
+
+      const content =
+        rawBlock["content"];
+
+      const topLeftX =
+        rawBlock["topLeftX"];
+
+      const topLeftY =
+        rawBlock["topLeftY"];
+
+      const bottomRightX =
+        rawBlock["bottomRightX"];
+
+      const bottomRightY =
+        rawBlock["bottomRightY"];
+
+      /*
+       * Only text blocks with usable coordinates
+       * are useful for answer-region mapping.
+       */
+      if (
+        typeof content !== "string" ||
+        typeof topLeftX !== "number" ||
+        typeof topLeftY !== "number" ||
+        typeof bottomRightX !== "number" ||
+        typeof bottomRightY !== "number"
+      ) {
+        return;
+      }
+
+      blocks.push({
+        id: `p${pageNumber}-b${blockIndex}`,
+
+        page: pageNumber,
+
+        content: content.trim(),
+
+        topLeftX,
+
+        topLeftY,
+
+        bottomRightX,
+
+        bottomRightY,
+      });
+    }
+  );
+
+  return blocks;
+}
+
+/* ============================================================
+ * OCR
+ * ============================================================ */
+
 /**
  * OCR a list of JPEG base64 images.
  *
- * pageOffset keeps the original page number
- * when processing documents in chunks.
+ * pageOffset keeps the original page number when documents
+ * are processed in chunks.
  */
 export async function ocrImages(
   imageBase64: string[],
@@ -77,22 +185,33 @@ export async function ocrImages(
   /*
    * Process sequentially.
    *
-   * This is slower than Promise.all but much safer
-   * for API rate limits and server memory.
+   * This is intentionally slower than Promise.all,
+   * but is much safer for:
+   * - API limits
+   * - memory usage
+   * - Vercel execution
+   * - large answer sheets
    */
   for (
     let i = 0;
     i < imageBase64.length;
     i++
   ) {
-    const base64 = imageBase64[i];
+    const base64 =
+      imageBase64[i];
 
     if (
       typeof base64 !== "string" ||
-      !base64
+      !base64.trim()
     ) {
       continue;
     }
+
+    console.log(
+      `[Mistral OCR] Processing page ${
+        pageOffset + i + 1
+      }`
+    );
 
     const response =
       await client.ocr.process({
@@ -102,7 +221,7 @@ export async function ocrImages(
           type: "image_url",
 
           /*
-           * pdf-processor.ts produces JPEG.
+           * pdf-processor.ts produces JPEG base64.
            */
           imageUrl:
             `data:image/jpeg;base64,${base64}`,
@@ -111,62 +230,48 @@ export async function ocrImages(
         includeBlocks: true,
       });
 
-    const page = response.pages?.[0];
+    const page =
+      response.pages?.[0];
 
     if (!page) {
+      console.warn(
+        `[Mistral OCR] No page returned for page ${
+          pageOffset + i + 1
+        }`
+      );
+
       continue;
     }
 
-    const blocks: OcrBlock[] =
-      (page.blocks ?? [])
-        .filter(
-          (block: any) =>
-            typeof block?.content ===
-              "string" &&
-            typeof block?.topLeftX ===
-              "number" &&
-            typeof block?.topLeftY ===
-              "number" &&
-            typeof block?.bottomRightX ===
-              "number" &&
-            typeof block?.bottomRightY ===
-              "number"
-        )
-        .map(
-          (
-            block: any,
-            blockIndex: number
-          ) => ({
-            id: `p${
-              pageOffset + i
-            }-b${blockIndex}`,
+    /*
+     * IMPORTANT:
+     *
+     * page.blocks is a union of many Mistral OCR
+     * block types. We do NOT access block.content
+     * directly here.
+     *
+     * parseOcrBlocks() safely validates each block.
+     */
+    const rawBlocks =
+      Array.isArray(page.blocks)
+        ? (page.blocks as readonly unknown[])
+        : [];
 
-            page:
-              pageOffset + i,
-
-            content:
-              block.content,
-
-            topLeftX:
-              block.topLeftX,
-
-            topLeftY:
-              block.topLeftY,
-
-            bottomRightX:
-              block.bottomRightX,
-
-            bottomRightY:
-              block.bottomRightY,
-          })
-        );
+    const blocks =
+      parseOcrBlocks(
+        rawBlocks,
+        pageOffset + i
+      );
 
     results.push({
       page:
         pageOffset + i,
 
       markdown:
-        page.markdown ?? "",
+        typeof page.markdown ===
+        "string"
+          ? page.markdown
+          : "",
 
       width:
         page.dimensions?.width ??
@@ -178,10 +283,20 @@ export async function ocrImages(
 
       blocks,
     });
+
+    console.log(
+      `[Mistral OCR] Page ${
+        pageOffset + i + 1
+      }: ${blocks.length} usable OCR blocks`
+    );
   }
 
   return results;
 }
+
+/* ============================================================
+ * JSON PARSING
+ * ============================================================ */
 
 /**
  * Parse a JSON array from model output.
@@ -197,22 +312,29 @@ function safeParseJsonArray(
     return [];
   }
 
-  let candidate = raw.trim();
+  let candidate =
+    raw.trim();
 
-  candidate = candidate.replace(
-    /^```json\s*/i,
-    ""
-  );
+  /*
+   * Remove markdown code fences.
+   */
+  candidate =
+    candidate.replace(
+      /^```json\s*/i,
+      ""
+    );
 
-  candidate = candidate.replace(
-    /^```\s*/i,
-    ""
-  );
+  candidate =
+    candidate.replace(
+      /^```\s*/i,
+      ""
+    );
 
-  candidate = candidate.replace(
-    /\s*```$/i,
-    ""
-  );
+  candidate =
+    candidate.replace(
+      /\s*```$/i,
+      ""
+    );
 
   const start =
     candidate.indexOf("[");
@@ -233,13 +355,15 @@ function safeParseJsonArray(
     return [];
   }
 
-  const json = candidate.slice(
-    start,
-    end + 1
-  );
+  const json =
+    candidate.slice(
+      start,
+      end + 1
+    );
 
   try {
-    const parsed = JSON.parse(json);
+    const parsed =
+      JSON.parse(json);
 
     return Array.isArray(parsed)
       ? parsed
@@ -253,6 +377,10 @@ function safeParseJsonArray(
     return [];
   }
 }
+
+/* ============================================================
+ * TEXT MODEL
+ * ============================================================ */
 
 async function callTextModel(
   prompt: string
@@ -278,25 +406,37 @@ async function callTextModel(
       ?.message?.content;
 
   if (
-    typeof content ===
-    "string"
+    typeof content === "string"
   ) {
     return content;
   }
 
   /*
-   * Some SDK versions can expose
-   * content as structured content.
+   * Some SDK versions can expose content
+   * as structured content.
    */
   if (
     Array.isArray(content)
   ) {
     return content
-      .map((part: any) =>
-        typeof part?.text ===
-        "string"
-          ? part.text
-          : ""
+      .map(
+        (
+          part: unknown
+        ) => {
+          if (
+            !isRecord(part)
+          ) {
+            return "";
+          }
+
+          const text =
+            part["text"];
+
+          return typeof text ===
+            "string"
+            ? text
+            : "";
+        }
       )
       .join("");
   }
@@ -304,24 +444,36 @@ async function callTextModel(
   return "";
 }
 
+/* ============================================================
+ * QUESTION EXTRACTION
+ * ============================================================ */
+
 /**
  * Extract questions from OCR pages.
  */
 export async function extractQuestionsFromOcr(
   pages: OcrPageResult[]
 ): Promise<Question[]> {
-  if (pages.length === 0) {
+  if (
+    !Array.isArray(pages) ||
+    pages.length === 0
+  ) {
     return [];
   }
 
   const combinedMarkdown =
-    pages
+    [...pages]
       .sort(
-        (a, b) =>
+        (
+          a: OcrPageResult,
+          b: OcrPageResult
+        ) =>
           a.page - b.page
       )
       .map(
-        (page) =>
+        (
+          page: OcrPageResult
+        ) =>
           `--- PAGE ${
             page.page + 1
           } ---\n${
@@ -384,34 +536,34 @@ ${combinedMarkdown}
       ) => {
         const marks =
           Number(
-            question.marks
+            question?.marks
           );
 
         return {
-          id: `q-${index}`,
+          id:
+            `q-${index}`,
 
           label:
             String(
-              question.label ??
+              question?.label ??
                 index + 1
             ).trim(),
 
           text:
             String(
-              question.text ??
+              question?.text ??
                 ""
             ).trim(),
 
           /*
-           * Do NOT silently invent 5 marks.
-           *
-           * If Mistral did not extract marks,
+           * If Mistral does not return marks,
            * use 1 as the safest minimum.
            */
           marks:
             Number.isFinite(
               marks
-            ) && marks > 0
+            ) &&
+            marks > 0
               ? marks
               : 1,
         };
@@ -421,64 +573,119 @@ ${combinedMarkdown}
       (
         question: Question
       ) =>
-        question.text.length > 0
+        question.text.length >
+        0
     );
 }
 
-/**
- * Map and grade answers from OCR blocks.
- */
+/* ============================================================
+ * ANSWER MAPPING + GRADING
+ * ============================================================ */
+
 export async function mapAndGradeAnswersFromOcr(
   pages: OcrPageResult[],
   questions: Question[]
 ): Promise<QuestionMapping[]> {
   if (
+    !Array.isArray(questions) ||
     questions.length === 0
   ) {
     return [];
   }
 
+  if (
+    !Array.isArray(pages) ||
+    pages.length === 0
+  ) {
+    return questions.map(
+      (
+        question: Question
+      ) => ({
+        questionId:
+          question.id,
+
+        status:
+          "unanswered" as const,
+
+        regions: [],
+
+        answerText: "",
+
+        score: 0,
+
+        feedback:
+          "No answer sheet OCR was available.",
+      })
+    );
+  }
+
+  /*
+   * Flatten all OCR blocks.
+   */
   const allBlocks: OcrBlock[] =
     pages.flatMap(
-      (page: OcrPageResult) =>
-        page.blocks
+      (
+        page: OcrPageResult
+      ) =>
+        Array.isArray(
+          page.blocks
+        )
+          ? page.blocks
+          : []
     );
 
+  /*
+   * Fast lookup by OCR block ID.
+   */
   const blockLookup =
-    new Map<string, OcrBlock>(
-      allBlocks.map(
-        (
-          block: OcrBlock
-        ): [
-          string,
-          OcrBlock
-        ] => [
-          block.id,
-          block,
-        ]
-      )
-    );
+    new Map<string, OcrBlock>();
 
+  allBlocks.forEach(
+    (
+      block: OcrBlock
+    ) => {
+      blockLookup.set(
+        block.id,
+        block
+      );
+    }
+  );
+
+  /*
+   * Build the question list sent to Mistral.
+   */
   const questionList =
     questions
       .map(
-        (question: Question) =>
+        (
+          question: Question
+        ) =>
           `${question.label}: ${
             question.text
           } [${
-            question.marks ?? 1
+            question.marks ??
+            1
           } marks]`
       )
       .join("\n");
 
+  /*
+   * Build OCR text while preserving
+   * exact block IDs.
+   */
   const ocrText =
-    pages
+    [...pages]
       .sort(
-        (a, b) =>
+        (
+          a: OcrPageResult,
+          b: OcrPageResult
+        ) =>
           a.page - b.page
       )
       .map(
-        (page: OcrPageResult) => {
+        (
+          page: OcrPageResult
+        ) => {
           const blocks =
             page.blocks
               .map(
@@ -498,6 +705,10 @@ export async function mapAndGradeAnswersFromOcr(
 
   const prompt = `
 You are grading a student's handwritten answer sheet.
+
+IMPORTANT:
+The OCR contains exact block IDs in square brackets.
+Use ONLY those exact IDs when selecting answer regions.
 
 QUESTIONS:
 
@@ -542,8 +753,11 @@ Rules:
 10. Grade the student's actual answer, not the OCR quality.
 11. Do not award marks for an answer belonging to another question.
 12. If the answer is clearly correct, give full marks.
-13. Give concise constructive feedback.
-14. Return ONLY JSON.
+13. If the answer is partially correct, award only appropriate partial marks.
+14. If the answer is unrelated to the question, give 0.
+15. Keep feedback concise and constructive.
+16. Do not use OCR blocks belonging to another question.
+17. Return ONLY JSON.
 
 Questions:
 
@@ -565,13 +779,19 @@ ${ocrText}
       "mapAndGradeAnswersFromOcr"
     );
 
+  /*
+   * Convert model output into our application's
+   * strict QuestionMapping structure.
+   */
   return questions.map(
     (
       question: Question
     ) => {
       const match =
         parsed.find(
-          (item: any) =>
+          (
+            item: any
+          ) =>
             String(
               item?.questionLabel ??
                 ""
@@ -579,6 +799,9 @@ ${ocrText}
             question.label
         );
 
+      /*
+       * No valid answer found.
+       */
       if (
         !match ||
         match.status !==
@@ -602,6 +825,9 @@ ${ocrText}
         };
       }
 
+      /*
+       * Only accept actual string block IDs.
+       */
       const blockIds =
         Array.isArray(
           match.blockIds
@@ -611,14 +837,15 @@ ${ocrText}
                 id: unknown
               ): id is string =>
                 typeof id ===
-                "string"
+                  "string" &&
+                id.trim().length >
+                  0
             )
           : [];
 
       /*
-       * Explicitly type every intermediate
-       * block so TypeScript can safely infer
-       * the following filter/map operations.
+       * Resolve only block IDs that actually
+       * exist in the OCR response.
        */
       const matchedBlocks: OcrBlock[] =
         blockIds
@@ -630,11 +857,17 @@ ${ocrText}
           )
           .filter(
             (
-              block: OcrBlock | undefined
+              block:
+                | OcrBlock
+                | undefined
             ): block is OcrBlock =>
               Boolean(block)
           );
 
+      /*
+       * Convert OCR coordinates into percentages
+       * for the answer-sheet viewer.
+       */
       const regions: AnswerRegion[] =
         matchedBlocks.map(
           (
@@ -655,6 +888,28 @@ ${ocrText}
             const pageHeight =
               page?.height || 1;
 
+            const x =
+              (block.topLeftX /
+                pageWidth) *
+              100;
+
+            const y =
+              (block.topLeftY /
+                pageHeight) *
+              100;
+
+            const width =
+              ((block.bottomRightX -
+                block.topLeftX) /
+                pageWidth) *
+              100;
+
+            const height =
+              ((block.bottomRightY -
+                block.topLeftY) /
+                pageHeight) *
+              100;
+
             return {
               page:
                 block.page,
@@ -664,9 +919,7 @@ ${ocrText}
                   0,
                   Math.min(
                     100,
-                    (block.topLeftX /
-                      pageWidth) *
-                      100
+                    x
                   )
                 ),
 
@@ -675,9 +928,7 @@ ${ocrText}
                   0,
                   Math.min(
                     100,
-                    (block.topLeftY /
-                      pageHeight) *
-                      100
+                    y
                   )
                 ),
 
@@ -686,10 +937,7 @@ ${ocrText}
                   0,
                   Math.min(
                     100,
-                    ((block.bottomRightX -
-                      block.topLeftX) /
-                      pageWidth) *
-                      100
+                    width
                   )
                 ),
 
@@ -698,16 +946,17 @@ ${ocrText}
                   0,
                   Math.min(
                     100,
-                    ((block.bottomRightY -
-                      block.topLeftY) /
-                      pageHeight) *
-                      100
+                    height
                   )
                 ),
             };
           }
         );
 
+      /*
+       * NEVER allow the AI to award more marks
+       * than the question actually carries.
+       */
       const rawScore =
         Number(
           match.score
@@ -715,8 +964,17 @@ ${ocrText}
 
       const questionMarks =
         Number(
-          question.marks ?? 1
+          question.marks ??
+            1
         );
+
+      const safeMarks =
+        Number.isFinite(
+          questionMarks
+        ) &&
+        questionMarks >= 0
+          ? questionMarks
+          : 1;
 
       const safeScore =
         Number.isFinite(
@@ -726,7 +984,7 @@ ${ocrText}
               0,
               Math.min(
                 rawScore,
-                questionMarks
+                safeMarks
               )
             )
           : 0;
@@ -759,11 +1017,14 @@ ${ocrText}
   );
 }
 
-/*
- * Keep these exports for compatibility
- * with older code.
- */
+/* ============================================================
+ * BACKWARD COMPATIBILITY
+ * ============================================================ */
 
+/**
+ * Older code may call extractQuestions()
+ * directly with image base64 values.
+ */
 export async function extractQuestions(
   imageBase64: string[]
 ): Promise<Question[]> {
@@ -778,6 +1039,10 @@ export async function extractQuestions(
   );
 }
 
+/**
+ * Older code may call extractAndMapAnswers()
+ * directly with answer-sheet images.
+ */
 export async function extractAndMapAnswers(
   answerSheetImages: string[],
   questions: Question[]
