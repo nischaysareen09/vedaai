@@ -42,7 +42,6 @@ interface ResultsData {
   questions: Question[];
   mappings: QuestionMapping[];
   imageStorageKey?: string;
-  answerImageCount?: number;
   createdAt?: string;
 }
 
@@ -121,11 +120,6 @@ export default function ResultsPage() {
           );
         }
 
-        /**
-         * =====================================================
-         * NORMALIZE QUESTIONS
-         * =====================================================
-         */
         const questions: Question[] =
           parsed.questions.map(
             (
@@ -151,11 +145,6 @@ export default function ResultsPage() {
             }
           );
 
-        /**
-         * =====================================================
-         * NORMALIZE MAPPINGS
-         * =====================================================
-         */
         const questionMap =
           new Map<
             string,
@@ -251,11 +240,6 @@ export default function ResultsPage() {
             null
         );
 
-        /**
-         * =====================================================
-         * LOAD ANSWER SHEET
-         * =====================================================
-         */
         setLoadingImages(
           true
         );
@@ -380,11 +364,6 @@ export default function ResultsPage() {
     };
   }, [router]);
 
-  /**
-   * ===========================================================
-   * SELECTED QUESTION
-   * ===========================================================
-   */
   const selectedQuestion =
     useMemo(() => {
       if (
@@ -408,11 +387,6 @@ export default function ResultsPage() {
       selectedQuestionId,
     ]);
 
-  /**
-   * ===========================================================
-   * SELECTED MAPPING
-   * ===========================================================
-   */
   const selectedMapping =
     useMemo(() => {
       if (
@@ -436,11 +410,6 @@ export default function ResultsPage() {
       selectedQuestionId,
     ]);
 
-  /**
-   * ===========================================================
-   * SELECTED REGIONS
-   * ===========================================================
-   */
   const selectedRegions =
     useMemo(() => {
       if (
@@ -458,11 +427,6 @@ export default function ResultsPage() {
       selectedMapping,
     ]);
 
-  /**
-   * ===========================================================
-   * SAFE SELECTED SCORE
-   * ===========================================================
-   */
   const selectedScore =
     useMemo(() => {
       if (
@@ -510,11 +474,6 @@ export default function ResultsPage() {
       selectedMapping,
     ]);
 
-  /**
-   * ===========================================================
-   * STATISTICS
-   * ===========================================================
-   */
   const stats =
     useMemo(() => {
       if (!result) {
@@ -732,7 +691,6 @@ export default function ResultsPage() {
       <Sidebar />
 
       <main className="ml-64 flex min-w-0 flex-1 flex-col overflow-hidden">
-        {/* HEADER */}
         <header className="relative flex h-[74px] shrink-0 items-center justify-between overflow-hidden border-b border-white/10 bg-[#101126] px-5 text-white lg:px-6">
           <div className="absolute -top-32 left-[35%] h-96 w-96 rounded-full bg-violet-600/20 blur-3xl" />
 
@@ -781,7 +739,6 @@ export default function ResultsPage() {
         </header>
 
         <div className="flex-1 min-h-0 overflow-auto p-4 lg:p-5">
-          {/* SCORE HERO */}
           <section className="relative mb-4 overflow-hidden rounded-[24px] bg-[#111126] text-white shadow-xl">
             <div className="absolute inset-0 bg-[radial-gradient(circle_at_80%_10%,rgba(168,85,247,0.30),transparent_28%)]" />
 
@@ -892,9 +849,7 @@ export default function ResultsPage() {
             </div>
           </section>
 
-          {/* WORKSPACE */}
           <section className="grid min-h-[620px] h-[calc(100vh-220px)] grid-cols-12 gap-4">
-            {/* QUESTIONS */}
             <div className="col-span-12 flex min-h-0 flex-col overflow-hidden rounded-[22px] border border-gray-200 bg-white shadow-sm lg:col-span-3">
               <div className="shrink-0 border-b border-gray-100 px-4 py-4">
                 <div className="flex items-center justify-between">
@@ -949,7 +904,6 @@ export default function ResultsPage() {
               </div>
             </div>
 
-            {/* ANSWER SHEET */}
             <div className="col-span-12 flex min-h-0 flex-col overflow-hidden rounded-[22px] border border-gray-200 bg-white shadow-sm lg:col-span-6">
               <div className="flex shrink-0 items-center justify-between gap-3 border-b border-gray-100 px-4 py-3.5">
                 <div className="flex min-w-0 items-center gap-2.5">
@@ -1051,7 +1005,6 @@ export default function ResultsPage() {
               </div>
             </div>
 
-            {/* AI ANALYSIS */}
             <div className="col-span-12 flex min-h-0 flex-col overflow-hidden rounded-[22px] border border-gray-200 bg-white shadow-sm lg:col-span-3">
               <div className="shrink-0 border-b border-violet-100 bg-gradient-to-br from-violet-50 via-white to-white px-4 py-4">
                 <div className="flex items-center justify-between">

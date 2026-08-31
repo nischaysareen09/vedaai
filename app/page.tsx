@@ -15,7 +15,11 @@ import {
 
 import {
   saveAnswerImages,
+  getAnswerImages,
 } from '@/lib/image-storage';
+
+import type { OcrPageResult } from '@/lib/mistral';
+import type { Question } from '@/lib/types';
 
 import {
   Upload,
@@ -43,7 +47,13 @@ import {
   useTeacherProfile,
 } from '@/lib/teacher-profile';
 
-const MAX_FILE_MB = 10;
+// Chunking now handles files of any page count, so this only guards
+// against genuinely oversized single-file uploads (e.g. wrong file picked).
+const MAX_FILE_MB = 50;
+
+// Vercel serverless functions cap the request body at ~4.5MB. Each request
+// below stays under this with real headroom for JSON/multipart overhead.
+const MAX_REQUEST_BYTES = 3 * 1024 * 1024; // 3MB per request
 
 type SlotKey =
   | 'question'
@@ -404,6 +414,174 @@ function WorkflowStep({
   );
 }
 
+/**
+ * Groups images into batches that stay under MAX_REQUEST_BYTES, using each
+ * base64 string's own length as a proxy for the bytes it'll add to the
+ * request body (close enough — base64 IS what gets transmitted, we don't
+ * need to decode it to estimate wire size).
+ */
+function chunkImagesBySize(
+  images: string[],
+  maxBytesPerChunk: number
+): string[][] {
+  const chunks: string[][] = [];
+  let current: string[] = [];
+  let currentBytes = 0;
+
+  for (const image of images) {
+    const approxBytes = image.length;
+
+    if (
+      current.length > 0 &&
+      currentBytes + approxBytes > maxBytesPerChunk
+    ) {
+      chunks.push(current);
+      current = [];
+      currentBytes = 0;
+    }
+
+    current.push(image);
+    currentBytes += approxBytes;
+  }
+
+  if (current.length > 0) {
+    chunks.push(current);
+  }
+
+  return chunks;
+}
+
+async function parseExtractResponse(
+  response: Response
+): Promise<any> {
+  if (!response.ok) {
+    let message = 'Assessment extraction failed.';
+
+    try {
+      const error = await response.json();
+
+      if (typeof error?.error === 'string') {
+        message = error.error;
+      }
+    } catch {
+      // Keep fallback message.
+    }
+
+    throw new Error(message);
+  }
+
+  return response.json();
+}
+
+/**
+ * Sends the question paper in size-safe batches. Each batch triggers its
+ * own OCR + question-extraction pass server-side (mode: "questions"), so
+ * results are merged and re-indexed client-side afterward.
+ */
+async function fetchQuestionsInBatches(
+  images: string[],
+  onProgress: (done: number, total: number) => void
+): Promise<Question[]> {
+  const batches = chunkImagesBySize(images, MAX_REQUEST_BYTES);
+  const allQuestions: any[] = [];
+  let pageOffset = 0;
+
+  for (const [index, batch] of batches.entries()) {
+    onProgress(index, batches.length);
+
+    const formData = new FormData();
+    formData.append('mode', 'questions');
+    formData.append('questionImages', JSON.stringify(batch));
+    formData.append('pageOffset', String(pageOffset));
+
+    const response = await fetch('/api/extract', {
+      method: 'POST',
+      body: formData,
+    });
+
+    const data = await parseExtractResponse(response);
+
+    if (Array.isArray(data.questions)) {
+      allQuestions.push(...data.questions);
+    }
+
+    pageOffset += batch.length;
+  }
+
+  onProgress(batches.length, batches.length);
+
+  // Each server call restarts its own "q-0, q-1..." ids, so re-index
+  // globally once everything is merged.
+  return allQuestions.map((question, index) => ({
+    ...question,
+    id: `q-${index}`,
+  }));
+}
+
+/**
+ * Sends the answer sheet in size-safe batches (mode: "answer-ocr" — OCR
+ * only, no grading yet). Returns the raw OCR pages so the final grading
+ * call can run once, on text, not images.
+ */
+async function fetchAnswerPagesInBatches(
+  images: string[],
+  onProgress: (done: number, total: number) => void
+): Promise<OcrPageResult[]> {
+  const batches = chunkImagesBySize(images, MAX_REQUEST_BYTES);
+  const allPages: OcrPageResult[] = [];
+  let pageOffset = 0;
+
+  for (const [index, batch] of batches.entries()) {
+    onProgress(index, batches.length);
+
+    const formData = new FormData();
+    formData.append('mode', 'answer-ocr');
+    formData.append('answerImages', JSON.stringify(batch));
+    formData.append('pageOffset', String(pageOffset));
+
+    const response = await fetch('/api/extract', {
+      method: 'POST',
+      body: formData,
+    });
+
+    const data = await parseExtractResponse(response);
+
+    if (Array.isArray(data.pages)) {
+      allPages.push(...data.pages);
+    }
+
+    pageOffset += batch.length;
+  }
+
+  onProgress(batches.length, batches.length);
+
+  return allPages;
+}
+
+/**
+ * Final grading call. This sends OCR'd text + block coordinates, not
+ * images — the payload here is tiny even for long answer sheets, since
+ * text is far smaller than the source JPEGs.
+ */
+async function fetchGrading(
+  questions: Question[],
+  pages: OcrPageResult[]
+): Promise<any[]> {
+  const formData = new FormData();
+  formData.append('mode', 'grade');
+  formData.append('questions', JSON.stringify(questions));
+  formData.append('pages', JSON.stringify(pages));
+
+  const response = await fetch('/api/extract', {
+    method: 'POST',
+    body: formData,
+  });
+
+  const data = await parseExtractResponse(response);
+
+  return Array.isArray(data.mappings) ? data.mappings : [];
+}
+
 export default function Home() {
   const [
     questionPaper,
@@ -536,11 +714,6 @@ export default function Home() {
           file
         );
 
-      /**
-       * Compress normal image uploads too.
-       * This prevents a phone photo from becoming
-       * an unnecessarily large request/storage item.
-       */
       const compressed =
         await compressBase64Image(
           raw,
@@ -568,7 +741,7 @@ export default function Home() {
       try {
         /**
          * =====================================================
-         * STEP 1 — QUESTION PAPER
+         * STEP 1 — QUESTION PAPER → IMAGES
          * =====================================================
          */
         const questionImages =
@@ -588,7 +761,7 @@ export default function Home() {
 
         /**
          * =====================================================
-         * STEP 2 — ANSWER SHEET
+         * STEP 2 — ANSWER SHEET → IMAGES
          * =====================================================
          */
         const answerImages =
@@ -608,143 +781,74 @@ export default function Home() {
 
         /**
          * =====================================================
-         * STEP 3 — AI EXTRACTION
+         * STEP 3 — QUESTIONS (chunked, stays under 4.5MB/request)
          * =====================================================
          */
-        setLoadingLabel(
-          'AI is analysing the assessment...'
-        );
-
-        const formData =
-          new FormData();
-
-        formData.append(
-          'questionPaper',
-          questionPaper
-        );
-
-        formData.append(
-          'answerSheet',
-          answerSheet
-        );
-
-        formData.append(
-          'questionImages',
-          JSON.stringify(
-            questionImages
-          )
-        );
-
-        formData.append(
-          'answerImages',
-          JSON.stringify(
-            answerImages
-          )
-        );
-
-        const response =
-          await fetch(
-            '/api/extract',
-            {
-              method: 'POST',
-              body: formData,
+        const questions =
+          await fetchQuestionsInBatches(
+            questionImages,
+            (done, total) => {
+              setLoadingLabel(
+                total > 1
+                  ? `Reading question paper (${done}/${total})...`
+                  : 'Reading question paper with AI...'
+              );
             }
           );
 
-        if (!response.ok) {
-          let message =
-            'Assessment extraction failed.';
-
-          try {
-            const error =
-              await response.json();
-
-            if (
-              typeof error?.error ===
-              'string'
-            ) {
-              message =
-                error.error;
-            }
-          } catch {
-            // Keep fallback.
-          }
-
+        if (questions.length === 0) {
           throw new Error(
-            message
-          );
-        }
-
-        const data =
-          await response.json();
-
-        if (
-          !Array.isArray(
-            data?.questions
-          )
-        ) {
-          throw new Error(
-            'AI did not return valid questions.'
-          );
-        }
-
-        if (
-          !Array.isArray(
-            data?.mappings
-          )
-        ) {
-          throw new Error(
-            'AI did not return valid answer mappings.'
+            'No questions could be extracted from the question paper. Try a clearer scan or a different file.'
           );
         }
 
         /**
          * =====================================================
-         * STEP 4 — NORMALIZE SCORES
+         * STEP 4 — ANSWER SHEET OCR (chunked)
          * =====================================================
-         *
-         * This guarantees that a question worth 1 mark
-         * can never display 4/1.
          */
-        const questions =
-          data.questions.map(
-            (question: {
-              id?: string;
-              label?: string;
-              text?: string;
-              marks?: unknown;
-            }) => {
-              const rawMarks =
-                Number(
-                  question.marks
-                );
-
-              const marks =
-                Number.isFinite(
-                  rawMarks
-                ) &&
-                rawMarks > 0
-                  ? rawMarks
-                  : 1;
-
-              return {
-                ...question,
-                id:
-                  question.id ||
-                  `q-${Math.random()
-                    .toString(36)
-                    .slice(2)}`,
-                label:
-                  question.label ||
-                  '',
-                text:
-                  question.text ||
-                  '',
-                marks,
-              };
+        const answerPages =
+          await fetchAnswerPagesInBatches(
+            answerImages,
+            (done, total) => {
+              setLoadingLabel(
+                total > 1
+                  ? `Reading answer sheet (${done}/${total})...`
+                  : 'Reading answer sheet with AI...'
+              );
             }
           );
 
+        if (answerPages.length === 0) {
+          throw new Error(
+            'Could not read any answer-sheet pages.'
+          );
+        }
+
+        /**
+         * =====================================================
+         * STEP 5 — GRADING (text-only, single small request)
+         * =====================================================
+         */
+        setLoadingLabel(
+          'AI is grading the answers...'
+        );
+
+        const rawMappings =
+          await fetchGrading(
+            questions,
+            answerPages
+          );
+
+        /**
+         * =====================================================
+         * STEP 6 — NORMALIZE SCORES
+         * =====================================================
+         *
+         * Defense in depth: mistral.ts already clamps scores
+         * server-side, but never trust a network boundary twice
+         * without checking.
+         */
         const questionMap =
           new Map<
             string,
@@ -752,19 +856,16 @@ export default function Home() {
           >(
             questions.map(
               (
-                question: {
-                  id: string;
-                  marks: number;
-                }
+                question
               ) => [
                 question.id,
-                question.marks,
+                question.marks ?? 1,
               ]
             )
           );
 
         const mappings =
-          data.mappings.map(
+          rawMappings.map(
             (mapping: {
               questionId?: string;
               score?: unknown;
@@ -826,7 +927,7 @@ export default function Home() {
 
         /**
          * =====================================================
-         * STEP 5 — STORAGE KEY
+         * STEP 7 — SAVE ANSWER SHEET IMAGES
          * =====================================================
          */
         setLoadingLabel(
@@ -838,28 +939,10 @@ export default function Home() {
             .toString(36)
             .slice(2, 10)}`;
 
-        /**
-         * CRITICAL:
-         *
-         * Save the images BEFORE navigating.
-         */
         await saveAnswerImages(
           imageStorageKey,
           answerImages
         );
-
-        /**
-         * Verify the save by reading it back.
-         *
-         * This catches IndexedDB failures before
-         * the results page is opened.
-         */
-        const {
-          getAnswerImages,
-        } =
-          await import(
-            '@/lib/image-storage'
-          );
 
         const savedImages =
           await getAnswerImages(
@@ -877,7 +960,7 @@ export default function Home() {
 
         /**
          * =====================================================
-         * STEP 6 — HISTORY
+         * STEP 8 — HISTORY
          * =====================================================
          */
         const totalMarks =
@@ -885,11 +968,11 @@ export default function Home() {
             (
               sum: number,
               question: {
-                marks: number;
+                marks?: number;
               }
             ) =>
               sum +
-              question.marks,
+              (question.marks ?? 1),
             0
           );
 
@@ -963,16 +1046,18 @@ export default function Home() {
 
         /**
          * =====================================================
-         * STEP 7 — LIGHTWEIGHT SESSION RESULT
+         * STEP 9 — LIGHTWEIGHT SESSION RESULT
          * =====================================================
+         *
+         * No images here — those live in IndexedDB (STEP 7).
+         * sessionStorage only holds small JSON, so it never hits
+         * the quota that broke this before.
          */
         const extractionResult =
           {
             questions,
             mappings,
             imageStorageKey,
-            answerImageCount:
-              answerImages.length,
             createdAt:
               new Date().toISOString(),
           };
@@ -986,7 +1071,7 @@ export default function Home() {
 
         /**
          * =====================================================
-         * STEP 8 — RESULTS
+         * STEP 10 — RESULTS
          * =====================================================
          */
         router.push(
