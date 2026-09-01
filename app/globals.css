@@ -31,3 +31,186 @@ body {
      overrode the Geist font loaded in layout.tsx. */
   font-family: var(--font-sans), Arial, Helvetica, sans-serif;
 }
+/* =========================================================
+   MOBILE RESPONSIVE FIX
+   ========================================================= */
+
+html,
+body {
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* Desktop remains unchanged */
+@media (max-width: 767px) {
+  html,
+  body {
+    width: 100%;
+    min-width: 0;
+    overflow-x: hidden;
+  }
+
+  body {
+    margin: 0;
+  }
+
+  /* -------------------------------------------------------
+     Common layout containers
+     ------------------------------------------------------- */
+
+  main,
+  section,
+  article,
+  .main-content,
+  .content,
+  .page-content {
+    max-width: 100%;
+  }
+
+  /* -------------------------------------------------------
+     Hide desktop sidebar on phones
+     ------------------------------------------------------- */
+
+  aside {
+    display: none !important;
+  }
+
+  /* -------------------------------------------------------
+     Prevent fixed desktop widths
+     ------------------------------------------------------- */
+
+  [style*="width: 300px"],
+  [style*="width: 320px"],
+  [style*="width: 340px"],
+  [style*="width: 360px"],
+  [style*="width: 380px"],
+  [style*="width: 400px"],
+  [style*="width: 420px"] {
+    max-width: 100% !important;
+  }
+
+  /* -------------------------------------------------------
+     Main application area
+     ------------------------------------------------------- */
+
+  .app-shell,
+  .app-layout,
+  .dashboard-layout,
+  .page-layout {
+    display: block !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+  }
+
+  /* -------------------------------------------------------
+     Generic grid fixes
+     ------------------------------------------------------- */
+
+  .grid {
+    min-width: 0;
+  }
+
+  /* Any desktop multi-column grid becomes one column */
+  .grid-cols-2,
+  .grid-cols-3,
+  .grid-cols-4 {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* -------------------------------------------------------
+     Main content
+     ------------------------------------------------------- */
+
+  main {
+    width: 100% !important;
+    min-width: 0 !important;
+    margin-left: 0 !important;
+    padding-left: 16px !important;
+    padding-right: 16px !important;
+  }
+
+  /* -------------------------------------------------------
+     Header
+     ------------------------------------------------------- */
+
+  header {
+    width: 100% !important;
+    min-width: 0 !important;
+  }
+
+  /* -------------------------------------------------------
+     Hero / landing section
+     ------------------------------------------------------- */
+
+  .hero,
+  .hero-section {
+    width: 100% !important;
+    min-width: 0 !important;
+  }
+
+  .hero h1,
+  .hero-section h1 {
+    max-width: 100% !important;
+    font-size: clamp(40px, 12vw, 64px) !important;
+    line-height: 0.98 !important;
+    overflow-wrap: break-word;
+  }
+
+  /* -------------------------------------------------------
+     Cards
+     ------------------------------------------------------- */
+
+  .card,
+  .panel,
+  .glass-card {
+    max-width: 100% !important;
+    min-width: 0 !important;
+  }
+
+  /* -------------------------------------------------------
+     Tables / wide content
+     ------------------------------------------------------- */
+
+  table {
+    max-width: 100%;
+  }
+
+  /* -------------------------------------------------------
+     Images
+     ------------------------------------------------------- */
+
+  img,
+  video,
+  canvas {
+    max-width: 100%;
+  }
+
+  /* -------------------------------------------------------
+     Buttons
+     ------------------------------------------------------- */
+
+  button {
+    max-width: 100%;
+  }
+}
+
+/* =========================================================
+   SMALL PHONES
+   ========================================================= */
+
+@media (max-width: 480px) {
+  main {
+    padding-left: 12px !important;
+    padding-right: 12px !important;
+  }
+
+  .hero h1,
+  .hero-section h1 {
+    font-size: 42px !important;
+  }
+}
