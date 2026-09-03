@@ -47,13 +47,15 @@ import {
   useTeacherProfile,
 } from '@/lib/teacher-profile';
 
-// Chunking handles files of any page count.
-// This only guards against genuinely oversized single-file uploads.
+import { useSidebar } from '@/lib/sidebar-state';
+
+// Chunking now handles files of any page count, so this only guards
+// against genuinely oversized single-file uploads (e.g. wrong file picked).
 const MAX_FILE_MB = 50;
 
-// Keep individual API requests comfortably below Vercel's
-// serverless request-body limit.
-const MAX_REQUEST_BYTES = 3 * 1024 * 1024;
+// Vercel serverless functions cap the request body at ~4.5MB. Each request
+// below stays under this with real headroom for JSON/multipart overhead.
+const MAX_REQUEST_BYTES = 3 * 1024 * 1024; // 3MB per request
 
 type SlotKey =
   | 'question'
@@ -83,8 +85,7 @@ function formatFileSize(
     return `${Math.max(
       1,
       Math.round(
-        bytes /
-          1024
+        bytes / 1024
       )
     )} KB`;
   }
@@ -107,7 +108,7 @@ function FileIcon({
   ) {
     return (
       <div
-        className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl ${
+        className={`flex h-12 w-12 items-center justify-center rounded-2xl ${
           active
             ? 'bg-orange-500 text-white'
             : 'bg-orange-50 text-orange-600'
@@ -120,7 +121,7 @@ function FileIcon({
 
   return (
     <div
-      className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl ${
+      className={`flex h-12 w-12 items-center justify-center rounded-2xl ${
         active
           ? 'bg-violet-600 text-white'
           : 'bg-violet-50 text-violet-600'
@@ -158,9 +159,7 @@ function UploadSlot({
 
     setIsDragging(false);
 
-    if (disabled) {
-      return;
-    }
+    if (disabled) return;
 
     const droppedFile =
       event.dataTransfer
@@ -208,7 +207,7 @@ function UploadSlot({
           setIsDragging(false);
         }}
         onDrop={handleDrop}
-        className={`group block min-w-0 cursor-pointer overflow-hidden rounded-[28px] border transition-all ${
+        className={`group block cursor-pointer overflow-hidden rounded-[28px] border transition-all ${
           disabled
             ? 'cursor-not-allowed opacity-70'
             : isDragging
@@ -230,8 +229,8 @@ function UploadSlot({
           }`}
         />
 
-        <div className="p-4 sm:p-7">
-          <div className="mb-7 flex min-w-0 items-start justify-between gap-4">
+        <div className="p-6 sm:p-7">
+          <div className="mb-7 flex items-start justify-between gap-4">
             <div className="flex min-w-0 items-center gap-4">
               <FileIcon
                 type={type}
@@ -242,7 +241,7 @@ function UploadSlot({
               />
 
               <div className="min-w-0">
-                <div className="mb-1 flex flex-wrap items-center gap-2">
+                <div className="mb-1 flex items-center gap-2">
                   <span className="text-[11px] font-bold uppercase tracking-[0.16em] text-gray-400">
                     Step {step}
                   </span>
@@ -267,7 +266,7 @@ function UploadSlot({
 
             {!file && (
               <span
-                className={`hidden shrink-0 rounded-full px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider sm:block ${
+                className={`hidden rounded-full px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider sm:block ${
                   isQuestion
                     ? 'bg-orange-50 text-orange-700'
                     : 'bg-violet-50 text-violet-700'
@@ -279,8 +278,8 @@ function UploadSlot({
           </div>
 
           {file ? (
-            <div className="min-w-0 rounded-2xl border border-gray-200 bg-gray-50 p-4">
-              <div className="flex min-w-0 items-center gap-4">
+            <div className="rounded-2xl border border-gray-200 bg-gray-50 p-4">
+              <div className="flex items-center gap-4">
                 <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white shadow-sm ring-1 ring-gray-200">
                   <FileText
                     className={`h-5 w-5 ${
@@ -303,9 +302,7 @@ function UploadSlot({
                       )}
                     </span>
 
-                    <span>
-                      •
-                    </span>
+                    <span>•</span>
 
                     <span>
                       {file.type ===
@@ -330,7 +327,7 @@ function UploadSlot({
               </div>
 
               <div className="mt-4 flex items-center gap-2 rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-2.5">
-                <Check className="h-4 w-4 shrink-0 text-emerald-600" />
+                <Check className="h-4 w-4 text-emerald-600" />
 
                 <span className="text-xs font-medium text-emerald-800">
                   File passed basic checks
@@ -353,16 +350,14 @@ function UploadSlot({
                 or click to browse
               </p>
 
-              <div className="mt-4 inline-flex max-w-full flex-wrap items-center justify-center gap-2 rounded-full bg-white px-3 py-1.5 text-[10px] font-semibold text-gray-500 ring-1 ring-gray-200">
-                <span>PDF</span>
+              <div className="mt-4 inline-flex items-center gap-2 rounded-full bg-white px-3 py-1.5 text-[10px] font-semibold text-gray-500 ring-1 ring-gray-200">
+                PDF
                 <span>•</span>
-                <span>JPG</span>
+                JPG
                 <span>•</span>
-                <span>PNG</span>
+                PNG
                 <span>•</span>
-                <span>
-                  Max {MAX_FILE_MB}MB
-                </span>
+                Max {MAX_FILE_MB}MB
               </div>
             </div>
           )}
@@ -370,9 +365,7 @@ function UploadSlot({
           {error && (
             <div className="mt-3 flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2.5 text-xs text-red-700">
               <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-              <span className="break-words">
-                {error}
-              </span>
+              <span>{error}</span>
             </div>
           )}
         </div>
@@ -395,7 +388,7 @@ function WorkflowStep({
   active?: boolean;
 }) {
   return (
-    <div className="flex min-w-0 items-start gap-3">
+    <div className="flex items-start gap-3">
       <div
         className={`relative flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${
           active
@@ -410,7 +403,7 @@ function WorkflowStep({
         </span>
       </div>
 
-      <div className="min-w-0">
+      <div>
         <p className="text-xs font-bold text-gray-900">
           {title}
         </p>
@@ -424,44 +417,36 @@ function WorkflowStep({
 }
 
 /**
- * Groups images into batches that stay under MAX_REQUEST_BYTES.
- *
- * The strings are base64, so their character length is a reasonable
- * approximation for request size.
+ * Groups images into batches that stay under MAX_REQUEST_BYTES, using each
+ * base64 string's own length as a proxy for the bytes it'll add to the
+ * request body (close enough — base64 IS what gets transmitted, we don't
+ * need to decode it to estimate wire size).
  */
 function chunkImagesBySize(
   images: string[],
   maxBytesPerChunk: number
 ): string[][] {
   const chunks: string[][] = [];
-
   let current: string[] = [];
   let currentBytes = 0;
 
   for (const image of images) {
-    const approxBytes =
-      image.length;
+    const approxBytes = image.length;
 
     if (
       current.length > 0 &&
-      currentBytes +
-        approxBytes >
-        maxBytesPerChunk
+      currentBytes + approxBytes > maxBytesPerChunk
     ) {
       chunks.push(current);
-
       current = [];
       currentBytes = 0;
     }
 
     current.push(image);
-    currentBytes +=
-      approxBytes;
+    currentBytes += approxBytes;
   }
 
-  if (
-    current.length > 0
-  ) {
+  if (current.length > 0) {
     chunks.push(current);
   }
 
@@ -472,279 +457,143 @@ async function parseExtractResponse(
   response: Response
 ): Promise<any> {
   if (!response.ok) {
-    let message =
-      'Assessment extraction failed.';
+    let message = 'Assessment extraction failed.';
 
     try {
-      const error =
-        await response.json();
+      const error = await response.json();
 
-      if (
-        typeof error?.error ===
-        'string'
-      ) {
-        message =
-          error.error;
+      if (typeof error?.error === 'string') {
+        message = error.error;
       }
     } catch {
       // Keep fallback message.
     }
 
-    throw new Error(
-      message
-    );
+    throw new Error(message);
   }
 
   return response.json();
 }
 
 /**
- * Sends the question paper in size-safe batches.
+ * Sends the question paper in size-safe batches. Each batch triggers its
+ * own OCR + question-extraction pass server-side (mode: "questions"), so
+ * results are merged and re-indexed client-side afterward.
  */
 async function fetchQuestionsInBatches(
   images: string[],
-  onProgress: (
-    done: number,
-    total: number
-  ) => void
+  onProgress: (done: number, total: number) => void
 ): Promise<Question[]> {
-  const batches =
-    chunkImagesBySize(
-      images,
-      MAX_REQUEST_BYTES
-    );
-
-  const allQuestions: any[] =
-    [];
-
+  const batches = chunkImagesBySize(images, MAX_REQUEST_BYTES);
+  const allQuestions: any[] = [];
   let pageOffset = 0;
 
-  for (
-    const [
-      index,
-      batch,
-    ] of batches.entries()
-  ) {
-    onProgress(
-      index,
-      batches.length
-    );
+  for (const [index, batch] of batches.entries()) {
+    onProgress(index, batches.length);
 
-    const formData =
-      new FormData();
+    const formData = new FormData();
+    formData.append('mode', 'questions');
+    formData.append('questionImages', JSON.stringify(batch));
+    formData.append('pageOffset', String(pageOffset));
 
-    formData.append(
-      'mode',
-      'questions'
-    );
+    const response = await fetch('/api/extract', {
+      method: 'POST',
+      body: formData,
+    });
 
-    formData.append(
-      'questionImages',
-      JSON.stringify(batch)
-    );
+    const data = await parseExtractResponse(response);
 
-    formData.append(
-      'pageOffset',
-      String(pageOffset)
-    );
-
-    const response =
-      await fetch(
-        '/api/extract',
-        {
-          method: 'POST',
-          body: formData,
-        }
-      );
-
-    const data =
-      await parseExtractResponse(
-        response
-      );
-
-    if (
-      Array.isArray(
-        data.questions
-      )
-    ) {
-      allQuestions.push(
-        ...data.questions
-      );
+    if (Array.isArray(data.questions)) {
+      allQuestions.push(...data.questions);
     }
 
-    pageOffset +=
-      batch.length;
+    pageOffset += batch.length;
   }
 
-  onProgress(
-    batches.length,
-    batches.length
-  );
+  onProgress(batches.length, batches.length);
 
-  return allQuestions.map(
-    (
-      question,
-      index
-    ) => ({
-      ...question,
-      id: `q-${index}`,
-    })
-  );
+  // Each server call restarts its own "q-0, q-1..." ids, so re-index
+  // globally once everything is merged.
+  return allQuestions.map((question, index) => ({
+    ...question,
+    id: `q-${index}`,
+  }));
 }
 
 /**
- * Sends answer-sheet images in size-safe batches.
+ * Sends the answer sheet in size-safe batches (mode: "answer-ocr" — OCR
+ * only, no grading yet). Returns the raw OCR pages so the final grading
+ * call can run once, on text, not images.
  */
 async function fetchAnswerPagesInBatches(
   images: string[],
-  onProgress: (
-    done: number,
-    total: number
-  ) => void
+  onProgress: (done: number, total: number) => void
 ): Promise<OcrPageResult[]> {
-  const batches =
-    chunkImagesBySize(
-      images,
-      MAX_REQUEST_BYTES
-    );
-
-  const allPages: OcrPageResult[] =
-    [];
-
+  const batches = chunkImagesBySize(images, MAX_REQUEST_BYTES);
+  const allPages: OcrPageResult[] = [];
   let pageOffset = 0;
 
-  for (
-    const [
-      index,
-      batch,
-    ] of batches.entries()
-  ) {
-    onProgress(
-      index,
-      batches.length
-    );
+  for (const [index, batch] of batches.entries()) {
+    onProgress(index, batches.length);
 
-    const formData =
-      new FormData();
+    const formData = new FormData();
+    formData.append('mode', 'answer-ocr');
+    formData.append('answerImages', JSON.stringify(batch));
+    formData.append('pageOffset', String(pageOffset));
 
-    formData.append(
-      'mode',
-      'answer-ocr'
-    );
+    const response = await fetch('/api/extract', {
+      method: 'POST',
+      body: formData,
+    });
 
-    formData.append(
-      'answerImages',
-      JSON.stringify(batch)
-    );
+    const data = await parseExtractResponse(response);
 
-    formData.append(
-      'pageOffset',
-      String(pageOffset)
-    );
-
-    const response =
-      await fetch(
-        '/api/extract',
-        {
-          method: 'POST',
-          body: formData,
-        }
-      );
-
-    const data =
-      await parseExtractResponse(
-        response
-      );
-
-    if (
-      Array.isArray(
-        data.pages
-      )
-    ) {
-      allPages.push(
-        ...data.pages
-      );
+    if (Array.isArray(data.pages)) {
+      allPages.push(...data.pages);
     }
 
-    pageOffset +=
-      batch.length;
+    pageOffset += batch.length;
   }
 
-  onProgress(
-    batches.length,
-    batches.length
-  );
+  onProgress(batches.length, batches.length);
 
   return allPages;
 }
 
 /**
- * Final grading call.
- *
- * Only OCR text and block coordinates are sent here,
- * not the original images.
+ * Final grading call. This sends OCR'd text + block coordinates, not
+ * images — the payload here is tiny even for long answer sheets, since
+ * text is far smaller than the source JPEGs.
  */
 async function fetchGrading(
   questions: Question[],
   pages: OcrPageResult[]
 ): Promise<any[]> {
-  const formData =
-    new FormData();
+  const formData = new FormData();
+  formData.append('mode', 'grade');
+  formData.append('questions', JSON.stringify(questions));
+  formData.append('pages', JSON.stringify(pages));
 
-  formData.append(
-    'mode',
-    'grade'
-  );
+  const response = await fetch('/api/extract', {
+    method: 'POST',
+    body: formData,
+  });
 
-  formData.append(
-    'questions',
-    JSON.stringify(
-      questions
-    )
-  );
+  const data = await parseExtractResponse(response);
 
-  formData.append(
-    'pages',
-    JSON.stringify(
-      pages
-    )
-  );
-
-  const response =
-    await fetch(
-      '/api/extract',
-      {
-        method: 'POST',
-        body: formData,
-      }
-    );
-
-  const data =
-    await parseExtractResponse(
-      response
-    );
-
-  return Array.isArray(
-    data.mappings
-  )
-    ? data.mappings
-    : [];
+  return Array.isArray(data.mappings) ? data.mappings : [];
 }
 
 export default function Home() {
   const [
     questionPaper,
     setQuestionPaper,
-  ] = useState<File | null>(
-    null
-  );
+  ] = useState<File | null>(null);
 
   const [
     answerSheet,
     setAnswerSheet,
-  ] = useState<File | null>(
-    null
-  );
+  ] = useState<File | null>(null);
 
   const [
     errors,
@@ -774,15 +623,17 @@ export default function Home() {
   const [
     submitError,
     setSubmitError,
-  ] = useState<
-    string | null
-  >(null);
+  ] = useState<string | null>(
+    null
+  );
 
   const router =
     useRouter();
 
   const { profile } =
     useTeacherProfile();
+
+  const { isCollapsed } = useSidebar();
 
   const handleFile = (
     slot: SlotKey,
@@ -797,10 +648,7 @@ export default function Home() {
         'image/'
       );
 
-    if (
-      !isPdf &&
-      !isImage
-    ) {
+    if (!isPdf && !isImage) {
       setErrors(
         (current) => ({
           ...current,
@@ -836,21 +684,14 @@ export default function Home() {
       })
     );
 
-    setSubmitError(
-      null
-    );
+    setSubmitError(null);
 
     if (
-      slot ===
-      'question'
+      slot === 'question'
     ) {
-      setQuestionPaper(
-        file
-      );
+      setQuestionPaper(file);
     } else {
-      setAnswerSheet(
-        file
-      );
+      setAnswerSheet(file);
     }
   };
 
@@ -898,21 +739,15 @@ export default function Home() {
         return;
       }
 
-      setSubmitError(
-        null
-      );
-
-      setLoading(
-        true
-      );
+      setSubmitError(null);
+      setLoading(true);
 
       try {
-        /*
+        /**
          * =====================================================
          * STEP 1 — QUESTION PAPER → IMAGES
          * =====================================================
          */
-
         const questionImages =
           await convertFileToImages(
             questionPaper,
@@ -928,12 +763,11 @@ export default function Home() {
           );
         }
 
-        /*
+        /**
          * =====================================================
          * STEP 2 — ANSWER SHEET → IMAGES
          * =====================================================
          */
-
         const answerImages =
           await convertFileToImages(
             answerSheet,
@@ -949,19 +783,15 @@ export default function Home() {
           );
         }
 
-        /*
+        /**
          * =====================================================
-         * STEP 3 — QUESTIONS
+         * STEP 3 — QUESTIONS (chunked, stays under 4.5MB/request)
          * =====================================================
          */
-
         const questions =
           await fetchQuestionsInBatches(
             questionImages,
-            (
-              done,
-              total
-            ) => {
+            (done, total) => {
               setLoadingLabel(
                 total > 1
                   ? `Reading question paper (${done}/${total})...`
@@ -970,28 +800,21 @@ export default function Home() {
             }
           );
 
-        if (
-          questions.length ===
-          0
-        ) {
+        if (questions.length === 0) {
           throw new Error(
             'No questions could be extracted from the question paper. Try a clearer scan or a different file.'
           );
         }
 
-        /*
+        /**
          * =====================================================
-         * STEP 4 — ANSWER SHEET OCR
+         * STEP 4 — ANSWER SHEET OCR (chunked)
          * =====================================================
          */
-
         const answerPages =
           await fetchAnswerPagesInBatches(
             answerImages,
-            (
-              done,
-              total
-            ) => {
+            (done, total) => {
               setLoadingLabel(
                 total > 1
                   ? `Reading answer sheet (${done}/${total})...`
@@ -1000,21 +823,17 @@ export default function Home() {
             }
           );
 
-        if (
-          answerPages.length ===
-          0
-        ) {
+        if (answerPages.length === 0) {
           throw new Error(
             'Could not read any answer-sheet pages.'
           );
         }
 
-        /*
+        /**
          * =====================================================
-         * STEP 5 — GRADING
+         * STEP 5 — GRADING (text-only, single small request)
          * =====================================================
          */
-
         setLoadingLabel(
           'AI is grading the answers...'
         );
@@ -1025,12 +844,15 @@ export default function Home() {
             answerPages
           );
 
-        /*
+        /**
          * =====================================================
          * STEP 6 — NORMALIZE SCORES
          * =====================================================
+         *
+         * Defense in depth: mistral.ts already clamps scores
+         * server-side, but never trust a network boundary twice
+         * without checking.
          */
-
         const questionMap =
           new Map<
             string,
@@ -1041,24 +863,21 @@ export default function Home() {
                 question
               ) => [
                 question.id,
-                question.marks ??
-                  1,
+                question.marks ?? 1,
               ]
             )
           );
 
         const mappings =
           rawMappings.map(
-            (
-              mapping: {
-                questionId?: string;
-                score?: unknown;
-                status?: string;
-                regions?: unknown;
-                answerText?: string;
-                feedback?: string;
-              }
-            ) => {
+            (mapping: {
+              questionId?: string;
+              score?: unknown;
+              status?: string;
+              regions?: unknown;
+              answerText?: string;
+              feedback?: string;
+            }) => {
               const maxMarks =
                 questionMap.get(
                   mapping.questionId ||
@@ -1110,17 +929,11 @@ export default function Home() {
             }
           );
 
-        /*
+        /**
          * =====================================================
          * STEP 7 — SAVE ANSWER SHEET IMAGES
          * =====================================================
-         *
-         * The images are stored in IndexedDB.
-         * This allows the results page to display the actual
-         * answer sheet without sending the images through
-         * sessionStorage or Vercel.
          */
-
         setLoadingLabel(
           'Saving answer sheet...'
         );
@@ -1149,12 +962,11 @@ export default function Home() {
           );
         }
 
-        /*
+        /**
          * =====================================================
          * STEP 8 — HISTORY
          * =====================================================
          */
-
         const totalMarks =
           questions.reduce(
             (
@@ -1164,10 +976,7 @@ export default function Home() {
               }
             ) =>
               sum +
-              (
-                question.marks ??
-                1
-              ),
+              (question.marks ?? 1),
             0
           );
 
@@ -1201,11 +1010,9 @@ export default function Home() {
 
         const answeredCount =
           mappings.filter(
-            (
-              mapping: {
-                status?: string;
-              }
-            ) =>
+            (mapping: {
+              status?: string;
+            }) =>
               mapping.status ===
               'answered'
           ).length;
@@ -1241,16 +1048,15 @@ export default function Home() {
               : 0,
         });
 
-        /*
+        /**
          * =====================================================
          * STEP 9 — LIGHTWEIGHT SESSION RESULT
          * =====================================================
          *
-         * IMPORTANT:
-         * Do NOT store answer images here.
-         * They are already in IndexedDB.
+         * No images here — those live in IndexedDB (STEP 7).
+         * sessionStorage only holds small JSON, so it never hits
+         * the quota that broke this before.
          */
-
         const extractionResult =
           {
             questions,
@@ -1267,12 +1073,11 @@ export default function Home() {
           )
         );
 
-        /*
+        /**
          * =====================================================
          * STEP 10 — RESULTS
          * =====================================================
          */
-
         router.push(
           '/results'
         );
@@ -1293,18 +1098,14 @@ export default function Home() {
           message
         );
 
-        setLoading(
-          false
-        );
+        setLoading(false);
       }
     };
 
   if (loading) {
     return (
       <LoadingState
-        label={
-          loadingLabel
-        }
+        label={loadingLabel}
       />
     );
   }
@@ -1319,14 +1120,10 @@ export default function Home() {
 
   const uploadedCount =
     Number(
-      Boolean(
-        questionPaper
-      )
+      Boolean(questionPaper)
     ) +
     Number(
-      Boolean(
-        answerSheet
-      )
+      Boolean(answerSheet)
     );
 
   const canSubmit =
@@ -1340,89 +1137,26 @@ export default function Home() {
       .filter(Boolean)
       .slice(0, 2)
       .map(
-        (
-          part
-        ) =>
+        (part) =>
           part[0]?.toUpperCase()
       )
       .join('') ||
     'T';
 
   return (
-    <div className="flex min-h-screen w-full overflow-x-hidden bg-[#f7f7f8] text-gray-950">
-      {/* =====================================================
-          DESKTOP SIDEBAR
-          Hidden on screens smaller than 768px.
-         ===================================================== */}
+    <div className="flex h-screen overflow-hidden bg-[#f7f7f8] text-gray-950">
+      <Sidebar />
 
-      <div className="desktop-sidebar">
-        <Sidebar />
-      </div>
-
-      {/* =====================================================
-          RESPONSIVE STYLES
-         ===================================================== */}
-
-      <style>{`
-        .desktop-sidebar {
-          display: block;
-        }
-
-        @media (max-width: 767px) {
-          .desktop-sidebar {
-            display: none !important;
-          }
-
-          main {
-            width: 100% !important;
-            min-width: 0 !important;
-            margin-left: 0 !important;
-          }
-
-          main > header {
-            width: 100% !important;
-            min-width: 0 !important;
-          }
-
-          main > div {
-            width: 100% !important;
-            min-width: 0 !important;
-          }
-
-          main h1,
-          main h2,
-          main h3,
-          main p,
-          main span {
-            overflow-wrap: anywhere;
-          }
-        }
-      `}</style>
-
-      {/* =====================================================
-          MAIN CONTENT
-
-          IMPORTANT:
-          ml-0 on mobile.
-          md:ml-64 only adds the desktop sidebar offset
-          when the screen is at least 768px.
-         ===================================================== */}
-
-      <main className="ml-0 flex min-w-0 flex-1 flex-col overflow-x-hidden overflow-y-auto md:ml-64">
-
-        {/* ===================================================
-            HEADER
-           =================================================== */}
-
+      <main className={`${isCollapsed ? 'md:ml-20' : 'md:ml-64'} flex min-w-0 flex-1 flex-col overflow-auto transition-[margin] duration-300 ease-in-out`}>
         <header className="sticky top-0 z-30 border-b border-gray-200/80 bg-white/90 backdrop-blur-xl">
-          <div className="flex min-h-[64px] min-w-0 items-center justify-between gap-3 px-4 sm:min-h-[72px] sm:px-8">
-            <div className="flex min-w-0 items-center gap-3">
-              <div className="min-w-0">
+          <div className="flex min-h-[72px] items-center justify-between px-6 sm:px-8">
+            <div className="flex items-center gap-3">
+              <div>
                 <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-gray-400">
                   AI Teacher&apos;s Toolkit
                 </p>
 
-                <h1 className="mt-0.5 truncate text-lg font-bold text-gray-950">
+                <h1 className="mt-0.5 text-lg font-bold text-gray-950">
                   New Assessment
                 </h1>
               </div>
@@ -1439,7 +1173,7 @@ export default function Home() {
             </div>
 
             {profile && (
-              <div className="flex shrink-0 items-center gap-3">
+              <div className="flex items-center gap-3">
                 <div className="hidden text-right sm:block">
                   <p className="text-xs font-semibold text-gray-900">
                     {profile.teacherName}
@@ -1450,7 +1184,7 @@ export default function Home() {
                   </p>
                 </div>
 
-                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gray-950 text-xs font-bold text-white">
+                <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gray-950 text-xs font-bold text-white">
                   {teacherInitials}
                 </div>
               </div>
@@ -1458,29 +1192,17 @@ export default function Home() {
           </div>
         </header>
 
-        {/* ===================================================
-            PAGE CONTENT
-           =================================================== */}
-
-        <div className="mx-auto w-full min-w-0 max-w-[1380px] px-4 py-5 sm:px-8 sm:py-7 lg:px-10">
-
-          {/* =================================================
-              HERO / OVERVIEW
-             ================================================= */}
-
+        <div className="mx-auto w-full max-w-[1380px] px-5 py-7 sm:px-8 lg:px-10">
           <section className="mb-7">
             <div className="grid gap-6 lg:grid-cols-[1fr_360px]">
-
-              {/* HERO */}
-
-              <div className="relative min-w-0 overflow-hidden rounded-[30px] bg-gray-950 px-6 py-8 text-white shadow-2xl sm:px-9 sm:py-10">
+              <div className="relative overflow-hidden rounded-[30px] bg-gray-950 px-7 py-8 text-white shadow-2xl sm:px-9 sm:py-10">
                 <div className="pointer-events-none absolute -right-20 -top-20 h-64 w-64 rounded-full bg-orange-500/20 blur-3xl" />
 
-                <div className="relative min-w-0">
-                  <div className="mb-5 inline-flex max-w-full items-center gap-2 rounded-full border border-white/10 bg-white/[0.07] px-3 py-1.5">
-                    <Sparkles className="h-3.5 w-3.5 shrink-0 text-orange-400" />
+                <div className="relative">
+                  <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.07] px-3 py-1.5">
+                    <Sparkles className="h-3.5 w-3.5 text-orange-400" />
 
-                    <span className="truncate text-[10px] font-bold uppercase tracking-[0.16em] text-gray-300">
+                    <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-gray-300">
                       Assessment Studio
                     </span>
                   </div>
@@ -1497,17 +1219,15 @@ export default function Home() {
                   </p>
 
                   <div className="mt-7 flex flex-wrap gap-3">
-                    <div className="flex max-w-full items-center gap-2 rounded-xl border border-white/10 bg-white/[0.06] px-3 py-2">
-                      <ShieldCheck className="h-4 w-4 shrink-0 text-emerald-400" />
-
+                    <div className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.06] px-3 py-2">
+                      <ShieldCheck className="h-4 w-4 text-emerald-400" />
                       <span className="text-xs text-gray-300">
                         Files checked before processing
                       </span>
                     </div>
 
-                    <div className="flex max-w-full items-center gap-2 rounded-xl border border-white/10 bg-white/[0.06] px-3 py-2">
-                      <Clock3 className="h-4 w-4 shrink-0 text-orange-400" />
-
+                    <div className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.06] px-3 py-2">
+                      <Clock3 className="h-4 w-4 text-orange-400" />
                       <span className="text-xs text-gray-300">
                         AI-assisted analysis
                       </span>
@@ -1516,10 +1236,8 @@ export default function Home() {
                 </div>
               </div>
 
-              {/* SETUP PROGRESS */}
-
-              <div className="min-w-0 rounded-[30px] border border-gray-200 bg-white p-5 shadow-sm sm:p-6">
-                <div className="flex items-start justify-between gap-4">
+              <div className="rounded-[30px] border border-gray-200 bg-white p-6 shadow-sm">
+                <div className="flex items-start justify-between">
                   <div>
                     <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-gray-400">
                       Setup progress
@@ -1531,7 +1249,7 @@ export default function Home() {
                   </div>
 
                   <div
-                    className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${
+                    className={`flex h-10 w-10 items-center justify-center rounded-xl ${
                       bothUploaded
                         ? 'bg-emerald-50 text-emerald-600'
                         : 'bg-gray-100 text-gray-500'
@@ -1567,11 +1285,9 @@ export default function Home() {
                         ? 'Uploaded and ready'
                         : 'Add the source questions'
                     }
-                    active={
-                      Boolean(
-                        questionPaper
-                      )
-                    }
+                    active={Boolean(
+                      questionPaper
+                    )}
                   />
 
                   <div className="ml-[17px] h-4 w-px bg-gray-200" />
@@ -1585,11 +1301,9 @@ export default function Home() {
                         ? 'Uploaded and ready'
                         : 'Add the student responses'
                     }
-                    active={
-                      Boolean(
-                        answerSheet
-                      )
-                    }
+                    active={Boolean(
+                      answerSheet
+                    )}
                   />
 
                   <div className="ml-[17px] h-4 w-px bg-gray-200" />
@@ -1612,12 +1326,8 @@ export default function Home() {
             </div>
           </section>
 
-          {/* =================================================
-              UPLOAD SECTION
-             ================================================= */}
-
           <section>
-            <div className="mb-5 min-w-0">
+            <div className="mb-5">
               <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-gray-400">
                 Assessment inputs
               </p>
@@ -1631,7 +1341,7 @@ export default function Home() {
               </p>
             </div>
 
-            <div className="grid min-w-0 gap-5 lg:grid-cols-2">
+            <div className="grid gap-5 lg:grid-cols-2">
               <UploadSlot
                 type="question"
                 step="01"
@@ -1640,9 +1350,7 @@ export default function Home() {
                 file={
                   questionPaper
                 }
-                onFile={(
-                  file
-                ) =>
+                onFile={(file) =>
                   handleFile(
                     'question',
                     file
@@ -1656,9 +1364,7 @@ export default function Home() {
                 error={
                   errors.question
                 }
-                disabled={
-                  loading
-                }
+                disabled={loading}
               />
 
               <UploadSlot
@@ -1669,9 +1375,7 @@ export default function Home() {
                 file={
                   answerSheet
                 }
-                onFile={(
-                  file
-                ) =>
+                onFile={(file) =>
                   handleFile(
                     'answer',
                     file
@@ -1685,23 +1389,17 @@ export default function Home() {
                 error={
                   errors.answer
                 }
-                disabled={
-                  loading
-                }
+                disabled={loading}
               />
             </div>
           </section>
 
-          {/* =================================================
-              ACTION BAR
-             ================================================= */}
-
           <section className="mt-5">
-            <div className="min-w-0 overflow-hidden rounded-[26px] border border-gray-200 bg-white shadow-sm">
+            <div className="overflow-hidden rounded-[26px] border border-gray-200 bg-white shadow-sm">
               <div className="flex flex-col gap-5 p-5 sm:flex-row sm:items-center sm:justify-between sm:px-6">
-                <div className="flex min-w-0 items-center gap-3">
+                <div className="flex items-center gap-3">
                   <div
-                    className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl ${
+                    className={`flex h-11 w-11 items-center justify-center rounded-xl ${
                       canSubmit
                         ? 'bg-gray-950 text-white'
                         : 'bg-gray-100 text-gray-400'
@@ -1714,7 +1412,7 @@ export default function Home() {
                     )}
                   </div>
 
-                  <div className="min-w-0">
+                  <div>
                     <p className="text-sm font-bold text-gray-900">
                       {canSubmit
                         ? 'Your assessment is ready'
@@ -1725,8 +1423,7 @@ export default function Home() {
                       {canSubmit
                         ? 'Start AI extraction and answer mapping.'
                         : `${2 - uploadedCount} document${
-                            2 -
-                              uploadedCount ===
+                            2 - uploadedCount ===
                             1
                               ? ''
                               : 's'
@@ -1744,7 +1441,7 @@ export default function Home() {
                     !canSubmit ||
                     loading
                   }
-                  className={`group flex min-h-12 w-full shrink-0 items-center justify-center gap-3 rounded-xl px-6 text-sm font-bold sm:w-auto ${
+                  className={`group flex min-h-12 items-center justify-center gap-3 rounded-xl px-6 text-sm font-bold ${
                     canSubmit
                       ? 'bg-gray-950 text-white hover:bg-gray-800'
                       : 'cursor-not-allowed bg-gray-100 text-gray-400'
@@ -1767,12 +1464,12 @@ export default function Home() {
                   <div className="flex items-start gap-3">
                     <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-red-600" />
 
-                    <div className="min-w-0">
+                    <div>
                       <p className="text-xs font-bold text-red-900">
                         We couldn&apos;t process this assessment
                       </p>
 
-                      <p className="mt-1 break-words text-xs leading-5 text-red-700">
+                      <p className="mt-1 text-xs leading-5 text-red-700">
                         {submitError}
                       </p>
                     </div>

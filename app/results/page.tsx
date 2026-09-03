@@ -38,6 +38,8 @@ import {
   QuestionMapping,
 } from '@/lib/types';
 
+import { useSidebar } from '@/lib/sidebar-state';
+
 interface ResultsData {
   questions: Question[];
   mappings: QuestionMapping[];
@@ -48,6 +50,8 @@ interface ResultsData {
 export default function ResultsPage() {
   const router =
     useRouter();
+
+  const { isCollapsed } = useSidebar();
 
   const [
     result,
@@ -690,7 +694,7 @@ export default function ResultsPage() {
     <div className="flex h-screen overflow-hidden bg-[#f4f2f9] text-gray-900">
       <Sidebar />
 
-      <main className="ml-64 flex min-w-0 flex-1 flex-col overflow-hidden">
+      <main className={`${isCollapsed ? 'md:ml-20' : 'md:ml-64'} flex min-w-0 flex-1 flex-col overflow-hidden transition-[margin] duration-300 ease-in-out`}>
         <header className="relative flex h-[74px] shrink-0 items-center justify-between overflow-hidden border-b border-white/10 bg-[#101126] px-5 text-white lg:px-6">
           <div className="absolute -top-32 left-[35%] h-96 w-96 rounded-full bg-violet-600/20 blur-3xl" />
 

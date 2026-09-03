@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono, Fraunces } from "next/font/google";
 import "./globals.css";
 import { TeacherProfileProvider } from "@/lib/teacher-profile";
+import { SidebarProvider } from "@/lib/sidebar-state";
 import TeacherOnboarding from "@/components/TeacherOnboarding";
 
 const geistSans = Geist({
@@ -36,8 +37,10 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     >
       <body className="min-h-full flex flex-col">
         <TeacherProfileProvider>
-          {children}
-          <TeacherOnboarding />
+          <SidebarProvider>
+            {children}
+            <TeacherOnboarding />
+          </SidebarProvider>
         </TeacherProfileProvider>
       </body>
     </html>

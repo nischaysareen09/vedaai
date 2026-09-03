@@ -58,6 +58,12 @@ const config: Config = {
         'fade-in': 'fadeIn 0.3s ease-in-out',
         'slide-up': 'slideUp 0.4s ease-out',
         'scale-in': 'scaleIn 0.3s ease-out',
+        // New: staggered list-item entrance (QuestionList)
+        'fade-slide-in': 'fadeSlideIn 0.35s ease-out both',
+        // New: soft shimmer sweep for loading skeletons
+        'shimmer': 'shimmer 1.6s linear infinite',
+        // New: gentle "breathing" scale for loading icons
+        'breathe': 'breathe 2s ease-in-out infinite',
       },
       keyframes: {
         fadeIn: {
@@ -71,6 +77,18 @@ const config: Config = {
         scaleIn: {
           '0%': { transform: 'scale(0.95)', opacity: '0' },
           '100%': { transform: 'scale(1)', opacity: '1' },
+        },
+        fadeSlideIn: {
+          '0%': { opacity: '0', transform: 'translateY(6px)' },
+          '100%': { opacity: '1', transform: 'translateY(0)' },
+        },
+        shimmer: {
+          '0%': { backgroundPosition: '-200% 0' },
+          '100%': { backgroundPosition: '200% 0' },
+        },
+        breathe: {
+          '0%, 100%': { transform: 'scale(1)', opacity: '1' },
+          '50%': { transform: 'scale(1.08)', opacity: '0.85' },
         },
       },
     },

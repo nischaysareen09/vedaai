@@ -398,7 +398,20 @@ async function callTextModel(
         },
       ],
 
-      temperature: 0.1,
+      /*
+       * temperature: 0 makes the model pick the single most likely
+       * token every time instead of sampling — this is the main lever
+       * for "grading the same sheet twice gives different results."
+       *
+       * randomSeed: per Mistral's docs, "different calls will generate
+       * deterministic results" when this is fixed. Together these get
+       * grading as close to reproducible as a hosted LLM API allows —
+       * not perfect (Mistral can still update the model behind
+       * "-latest" over time), but stable run-to-run for the same
+       * document today.
+       */
+      temperature: 0,
+      randomSeed: 42,
     });
 
   const content =

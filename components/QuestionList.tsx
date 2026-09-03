@@ -97,11 +97,15 @@ export default function QuestionList({
                 key={question.id}
                 type="button"
                 onClick={() => onSelectQuestion(question.id)}
+                // Stagger entrance, but cap the delay so long question lists
+                // don't take forever to finish appearing.
+                style={{ animationDelay: `${Math.min(index * 40, 400)}ms` }}
                 className={`
                   w-full text-left px-4 py-3
                   border-b border-gray-200
                   transition-colors
                   border-l-4
+                  animate-fade-slide-in
                   ${
                     isSelected
                       ? 'bg-purple-50 border-l-purple-600'
@@ -116,6 +120,7 @@ export default function QuestionList({
                       w-8 h-8 rounded-full
                       flex items-center justify-center
                       shrink-0 text-xs font-bold
+                      transition-colors duration-200
                       ${
                         isSelected
                           ? 'bg-purple-600 text-white'
@@ -143,7 +148,7 @@ export default function QuestionList({
                       </p>
 
                       {isSelected && (
-                        <ChevronDown className="w-4 h-4 text-purple-600 shrink-0 rotate-[-90deg]" />
+                        <ChevronDown className="w-4 h-4 text-purple-600 shrink-0 rotate-[-90deg] transition-transform" />
                       )}
                     </div>
 
